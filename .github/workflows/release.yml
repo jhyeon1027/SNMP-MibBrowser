@@ -1,0 +1,35 @@
+name: Publish release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Publish single-file Windows executable
+        run: dotnet publish SnmpMibBrowser.csproj -c Release -o artifacts
+      - name: Create source archive
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Force | Where-Object { $_.Name -notin @('.git', 'bin', 'obj', 'artifacts') }
+          Compress-Archive -Path $files.FullName -DestinationPath artifacts/SNMP-MibBrowser-Source-${{ github.ref_name }}.zip
+      - name: Create GitHub release and upload assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = 'artifacts/SNMP MibBrowser.exe'
+          $source = 'artifacts/SNMP-MibBrowser-Source-${{ github.ref_name }}.zip'
+          (Get-FileHash -Algorithm SHA256 $exe).Hash + '  SNMP MibBrowser.exe' | Set-Content artifacts/SHA256SUMS.txt
+          $arguments = @('release', 'create', '${{ github.ref_name }}', $exe, $source, 'artifacts/SHA256SUMS.txt', '--generate-notes')
+          if ('${{ github.ref_name }}' -match '-') { $arguments += '--prerelease' }
+          gh @arguments
