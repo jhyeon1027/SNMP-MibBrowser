@@ -1,58 +1,59 @@
 # SNMP MibBrowser
 
-Aktueller Stand: **1.0.0 build10**
+Current version: **1.0.0 build10**
 
-Open-Source MIB-Browser und SNMP-Diagnosewerkzeug für Windows (WPF/.NET 9). Die Oberfläche orientiert sich am ACLI Session Manager und unterstützt Deutsch/Englisch sowie ein persistentes helles und dunkles Design.
+Open-source MIB browser and SNMP diagnostics tool for Windows, built with WPF and .NET 9. The interface is inspired by ACLI Session Manager and supports English and German as well as persistent light and dark themes.
 
-## Funktionen
+## Features
 
-- SNMP v1, v2c und v3 (noAuthNoPriv, authNoPriv, authPriv)
-- GET, GET NEXT, WALK und SET
-- SNMPv3: MD5, SHA-1/256/384/512 sowie DES und AES-128/192/256
-- beliebig viele SMIv1/SMIv2-MIB-Dateien oder ganze Ordner laden
-- MIB-Baum, Volltextsuche, Objektinformationen und symbolische Ergebnisnamen
-- alphabetische A–Z-Sortierung der Knoten auf jeder Ebene des MIB-Baums
-- Antwortliste mit Datentyp, Wert und Laufzeit; Ereignisprotokoll
-- eingebauter Standardkatalog für SNMPv2-MIB, IF-MIB, IP-MIB, TCP-MIB, UDP-MIB, HOST-RESOURCES-MIB, ENTITY-MIB, BRIDGE-MIB und LLDP-MIB
-- portable x64-Single-File-EXE ohne erforderliche .NET-Installation
-- hierarchischer OID-Baum mit automatisch erzeugten Zwischenknoten
-- Gerätetabellen für Interfaces, IP-Adressen, Routing, ARP und LLDP-Nachbarn
-- Interfaces-Tabelle mit Filter auf physische Ports, binär korrekter MAC-Darstellung und IF-MIB-Hochgeschwindigkeitswerten
-- typgerechte Darstellung von Broadcast-Adressen, Routing-/ARP-Enums sowie LLDP Chassis- und Port-IDs
-- LLDP-Zuordnung des lokalen Portnamens aus der Local-Port-Tabelle und eindeutig bezeichnete Remote-Port-Spalte
-- einheitliche dünne, themegerechte Tabellenlinien ohne schwarze oder doppelte Zellrahmen
-- einklappbare SNMP-Konfiguration mit Zielgerät, Profil, Port, Version sowie v1/v2c- und v3-Zugangsdaten
-- automatische `.0`-Instanz für skalare OIDs sowie GET/WALK per Doppelklick im OID-Baum
-- WALK-Ergebnisse zusätzlich als pivotierte Tabelle mit Indexzeilen und Objektspalten
-- Kontextmenü am MIB-Baum für GET, GET NEXT, WALK, Kopieren und Details
-- persistente SNMP-Profile und auswählbarer Standard-MIB-Ordner im Optionen-Dialog
-- SNMP-Profile enthalten ausschließlich Protokolleinstellungen; das Zielgerät bleibt unabhängig im Hauptfenster
-- die Profilauswahl befüllt die sichtbaren SNMP-Einstellungen; Ziel und Werte können für die aktuelle Sitzung direkt angepasst werden
-- synchronisierte Ziel- und Profilauswahl in der SNMP-Konfiguration sowie direkt vor den Abfrageaktionen
-- Enter im Target-Feld führt unmittelbar einen GET-Test auf `sysDescr.0` aus
-- konsistente deutsche und englische Texte für Statusmeldungen, Dialoge, Protokollmeldungen, Tooltips und Tabellenspalten
-- durchgehend linksbündige ComboBox-Werte und Auswahllisten
-- MIB-Datei- und MIB-Ordner-Import in der obersten Kopfleiste; GET, GET NEXT und WALK arbeiten mit dem ausgewählten Baumknoten
-- kompakter Sprachwechsel per Globus-Symbol
-- integrierte GitHub-Updateprüfung mit gespeicherter Repository-URL, optionaler Pre-Release-Auswahl, SHA-256-Prüfung und automatischem Neustart
-- eigenständiger SNMP-SET-Tab mit OID, Datentyp und Schreibwert
-- unveränderlicher Public-MIB-Baum; zusätzliche Dateien erweitern ausschließlich `private.enterprises` und `experimental`
-- deduplizierter MIB-Import, der eingebaute Public-MIB-Definitionen beibehält
+- SNMP v1, v2c, and v3 (`noAuthNoPriv`, `authNoPriv`, and `authPriv`)
+- GET, GET NEXT, WALK, and SET operations
+- SNMPv3 support for MD5, SHA-1/256/384/512, DES, and AES-128/192/256
+- Import individual SMIv1/SMIv2 MIB files or entire folders
+- Hierarchical MIB tree, full-text search, object details, and symbolic result names
+- Alphabetical A-Z sorting of nodes at every level of the MIB tree
+- Result list with data type, value, response time, and event log
+- Built-in standard catalog for SNMPv2-MIB, IF-MIB, IP-MIB, TCP-MIB, UDP-MIB, HOST-RESOURCES-MIB, ENTITY-MIB, BRIDGE-MIB, and LLDP-MIB
+- Portable Windows x64 single-file executable with no separate .NET installation required
+- Hierarchical OID tree with automatically generated intermediate nodes
+- Dedicated device tables for interfaces, IP addresses, routes, ARP entries, and LLDP neighbors
+- Physical-interface filtering, correct binary MAC address formatting, and IF-MIB high-speed values
+- Type-aware formatting for broadcast addresses, routing and ARP enumerations, and LLDP chassis and port IDs
+- LLDP local-port mapping and clearly labeled remote-port information
+- Consistent thin, theme-aware table lines without black or doubled cell borders
+- Collapsible SNMP configuration with target, profile, port, version, and v1/v2c or v3 credentials
+- Automatic `.0` instances for scalar OIDs and GET/WALK by double-clicking an OID tree node
+- Optional pivoted WALK table with index rows and object columns
+- MIB-tree context menu for GET, GET NEXT, WALK, copy, and object details
+- Persistent SNMP profiles and a configurable default MIB folder
+- SNMP profiles contain protocol settings only; the target remains independent in the main window
+- Profile selection populates the visible SNMP settings while allowing per-session overrides
+- Synchronized target and profile controls in the configuration area and query toolbar
+- Pressing Enter in the Target field immediately tests the device with a GET request for `sysDescr.0`
+- Consistent English and German localization for status messages, dialogs, logs, tooltips, and table columns
+- Left-aligned ComboBox values and selection lists
+- MIB file and folder import in the top toolbar
+- Compact language switching through a globe icon
+- Integrated GitHub update checker with optional pre-release support, SHA-256 verification, and automatic restart
+- Dedicated SNMP SET tab with OID, data type, and value fields
+- Protected built-in public MIB tree; imported files extend only `private.enterprises` and `experimental`
+- Deduplicated MIB imports that preserve built-in public MIB definitions
 
-## Start
+## Run from source
 
 ```powershell
 dotnet run --project SnmpMibBrowser.csproj
 ```
 
-Oder die veröffentlichte `SNMP MibBrowser.exe` direkt starten.
+Alternatively, download and run the published `SNMP MibBrowser.exe`.
 
-## Updates und GitHub
+## Updates and GitHub releases
 
-Im Hauptfenster öffnet **Updates** die GitHub-Updateprüfung. Das Repository [`marlon82/SNMP-MibBrowser`](https://github.com/marlon82/SNMP-MibBrowser) ist fest voreingestellt. Vorabversionen lassen sich separat ein- oder ausschließen. Details zur Veröffentlichung und zum automatischen Tag-Workflow stehen in [`RELEASE.md`](RELEASE.md).
+Select **Updates** in the main window to open the GitHub update checker. The repository [`marlon82/SNMP-MibBrowser`](https://github.com/marlon82/SNMP-MibBrowser) is configured by default. Pre-release versions can be included or excluded separately. See [`RELEASE.md`](RELEASE.md) for details about publishing and the automated tag workflow.
 
-Hinweis: UDP/161 muss zwischen Rechner und Zielgerät erreichbar sein. SNMP SET verändert das Zielgerät und erfordert eine schreibberechtigte Community bzw. einen passenden v3-Benutzer.
+> [!NOTE]
+> UDP port 161 must be reachable between the computer and the target device. SNMP SET modifies the target device and requires a write-enabled community or an appropriately configured SNMPv3 user.
 
-## Lizenz und Herkunft
+## License and provenance
 
-Der Anwendungscode steht unter MIT. Er wurde als Clean-Room-Neuimplementierung erstellt und enthält keinen Code und keine Binärdateien des referenzierten XIO-Soft-Programms. SharpSnmpLib wird unter MIT verwendet. MIB-Dateien von Geräteherstellern werden aus Lizenzgründen nicht mitgeliefert und können über die Oberfläche importiert werden.
+The application is licensed under the MIT License. It is a clean-room reimplementation and contains no source code or binaries from the referenced XIO-Soft application. SharpSnmpLib is used under the MIT License. Vendor-specific MIB files are not bundled for licensing reasons and can be imported through the application.

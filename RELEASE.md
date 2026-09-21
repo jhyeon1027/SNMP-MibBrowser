@@ -1,33 +1,33 @@
-# Veröffentlichung auf GitHub
+# Publishing on GitHub
 
-## Einmalige Einrichtung
+## One-time setup
 
-1. Das öffentliche Repository `https://github.com/marlon82/SNMP-MibBrowser` verwenden.
-2. Diesen Projektordner als Repository-Root verwenden und auf den Branch `main` pushen.
-3. Die Update-URL und `RepositoryUrl` sind bereits fest auf dieses Repository eingestellt.
+1. Use the public repository `https://github.com/marlon82/SNMP-MibBrowser`.
+2. Use this project directory as the repository root and push it to the `main` branch.
+3. The update URL and `RepositoryUrl` are already configured for this repository.
 
-## Release erstellen
+## Create a release
 
-Ein stabiler Tag erzeugt automatisch ein reguläres Release:
+A stable tag automatically creates a regular release:
 
 ```powershell
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Ein Tag mit Suffix wird automatisch als Vorabversion veröffentlicht:
+A tag with a suffix is automatically published as a pre-release:
 
 ```powershell
 git tag v1.1.0-beta.1
 git push origin v1.1.0-beta.1
 ```
 
-Der Workflow baut die portable Windows-x64-Single-File-EXE, erstellt ein Quellarchiv und lädt beide Dateien in das GitHub Release. Der Assetname `SNMP MibBrowser.exe` beziehungsweise `SNMP-MibBrowser.exe` wird vom integrierten Updater erkannt.
+The workflow builds the portable Windows x64 single-file executable, creates a source archive, and uploads both files to the GitHub release. The integrated updater recognizes assets named `SNMP MibBrowser.exe` or `SNMP-MibBrowser.exe`.
 
-## Checkliste
+## Checklist
 
-- Versions- und Build-String aktualisieren.
-- `dotnet build -c Release` lokal ausführen.
-- Light/Dark sowie Deutsch/Englisch prüfen.
-- SNMP GET, WALK, Tabellen und Updateprüfung testen.
-- Tag erstellen und GitHub Actions vollständig durchlaufen lassen.
+- Update the version and build string.
+- Run `dotnet build -c Release` locally.
+- Verify light and dark themes in both English and German.
+- Test SNMP GET, WALK, tables, and update checking.
+- Create the tag and ensure the GitHub Actions workflow completes successfully.
