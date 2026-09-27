@@ -49,7 +49,6 @@ public sealed class UserSettings
     public string MibFolder { get; set; } = "";
     public List<SnmpProfile> Profiles { get; set; } = [];
     public string SelectedProfile { get; set; } = "";
-    public string GitHubRepository { get; set; } = "https://github.com/marlon82/SNMP-MibBrowser";
     public bool IncludePrereleases { get; set; }
 }
 

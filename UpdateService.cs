@@ -7,14 +7,14 @@ namespace SnmpMibBrowser;
 
 public sealed class UpdateService
 {
+    private const string RepositorySlug = "marlon82/SNMP-MibBrowser";
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     public UpdateService() => _http.DefaultRequestHeaders.UserAgent.ParseAdd("SNMP-MibBrowser/1.0");
 
-    public async Task<GitHubRelease?> FindUpdateAsync(string repository, bool includePrereleases, Version current, CancellationToken ct)
+    public async Task<GitHubRelease?> FindUpdateAsync(bool includePrereleases, Version current, CancellationToken ct)
     {
-        var slug = RepositorySlug(repository);
-        using var response = await _http.GetAsync($"https://api.github.com/repos/{slug}/releases?per_page=30", ct);
+        using var response = await _http.GetAsync($"https://api.github.com/repos/{RepositorySlug}/releases?per_page=30", ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var json = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
@@ -71,14 +71,6 @@ public sealed class UpdateService
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(script) { UseShellExecute = true, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden });
     }
 
-    private static string RepositorySlug(string value)
-    {
-        value = value.Trim().TrimEnd('/');
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)) value = uri.AbsolutePath.Trim('/');
-        if (value.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) value = value[..^4];
-        if (value.Split('/').Length != 2) throw new ArgumentException("Use a GitHub repository URL or owner/repository.");
-        return value;
-    }
     private static bool TryVersion(string tag, out Version version) => Version.TryParse(tag.Trim().TrimStart('v', 'V').Split('-')[0], out version!);
     private static string SafeName(string value) => string.Concat(value.Select(c => char.IsLetterOrDigit(c) || c is '.' or '-' ? c : '_'));
 }

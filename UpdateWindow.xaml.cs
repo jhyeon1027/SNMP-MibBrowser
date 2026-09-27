@@ -14,7 +14,7 @@ public partial class UpdateWindow : Window
     public UpdateWindow(UserSettings settings, string language)
     {
         InitializeComponent(); _settings = settings; _language = language;
-        RepositoryBox.Text = settings.GitHubRepository; PrereleaseBox.IsChecked = settings.IncludePrereleases;
+        PrereleaseBox.IsChecked = settings.IncludePrereleases;
         Localize(); Closing += (_, _) => SaveChoices();
     }
 
@@ -24,7 +24,7 @@ public partial class UpdateWindow : Window
         try
         {
             var current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
-            _release = await _updates.FindUpdateAsync(RepositoryBox.Text, PrereleaseBox.IsChecked == true, new Version(current.Major, current.Minor, current.Build), CancellationToken.None);
+            _release = await _updates.FindUpdateAsync(PrereleaseBox.IsChecked == true, new Version(current.Major, current.Minor, current.Build), CancellationToken.None);
             if (_release == null) ReleaseText.Text = T("Keine neuere passende Version gefunden.", "No newer matching version was found.");
             else ReleaseText.Text = $"{_release.Name} ({_release.Tag}){(_release.Prerelease ? "  [PRE-RELEASE]" : "")}\r\n\r\n{_release.Notes}";
             InstallButton.IsEnabled = ReleasePageButton.IsEnabled = _release != null;
@@ -48,8 +48,8 @@ public partial class UpdateWindow : Window
     }
 
     private void ReleasePage_Click(object sender, RoutedEventArgs e) { if (_release != null) Process.Start(new ProcessStartInfo(_release.PageUrl) { UseShellExecute = true }); }
-    private void SaveChoices() { _settings.GitHubRepository = RepositoryBox.Text.Trim(); _settings.IncludePrereleases = PrereleaseBox.IsChecked == true; }
-    private void SetBusy(bool busy) { CheckButton.IsEnabled = !busy; InstallButton.IsEnabled = !busy && _release != null; RepositoryBox.IsEnabled = PrereleaseBox.IsEnabled = !busy; }
+    private void SaveChoices() { _settings.IncludePrereleases = PrereleaseBox.IsChecked == true; }
+    private void SetBusy(bool busy) { CheckButton.IsEnabled = !busy; InstallButton.IsEnabled = !busy && _release != null; PrereleaseBox.IsEnabled = !busy; }
     private string T(string de, string en) => _language == "de" ? de : en;
-    private void Localize() { var de = _language == "de"; Title = de ? "Updates" : "Updates"; TitleText.Text = de ? "Anwendungsupdates" : "Application updates"; RepositoryLabel.Text = "GitHub Repository"; PrereleaseBox.Content = de ? "Vorabversionen einbeziehen" : "Include prereleases"; CheckButton.Content = de ? "Jetzt prüfen" : "Check now"; InstallButton.Content = de ? "Herunterladen und installieren" : "Download and install"; ReleasePageButton.Content = de ? "Release-Seite öffnen" : "Open release page"; CloseButton.Content = de ? "Schließen" : "Close"; ReleaseText.Text = de ? "Repository eintragen und die Updateprüfung starten." : "Enter the repository and start the update check."; }
+    private void Localize() { var de = _language == "de"; Title = "Updates"; TitleText.Text = de ? "Anwendungsupdates" : "Application updates"; PrereleaseBox.Content = de ? "Vorabversionen einbeziehen" : "Include prereleases"; CheckButton.Content = de ? "Jetzt prüfen" : "Check now"; InstallButton.Content = de ? "Herunterladen und installieren" : "Download and install"; ReleasePageButton.Content = de ? "Release-Seite öffnen" : "Open release page"; CloseButton.Content = de ? "Schließen" : "Close"; ReleaseText.Text = de ? "Die Updateprüfung verwendet das offizielle SNMP-MibBrowser-Repository." : "Update checks use the official SNMP MibBrowser repository."; }
 }

@@ -14,7 +14,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(UserSettings settings, string language)
     {
         InitializeComponent(); _language = language;
-        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, GitHubRepository=settings.GitHubRepository, IncludePrereleases=settings.IncludePrereleases,
+        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, IncludePrereleases=settings.IncludePrereleases,
             Profiles=settings.Profiles.Select(Clone).ToList() };
         _profiles = new(ResultSettings.Profiles); ProfilesList.ItemsSource = _profiles; MibFolderBox.Text = settings.MibFolder;
         Localize(); if (_profiles.Count > 0) ProfilesList.SelectedIndex = 0;

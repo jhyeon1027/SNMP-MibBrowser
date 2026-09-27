@@ -589,7 +589,6 @@ public partial class MainWindow : Window
             _settings.Profiles.Add(new SnmpProfile { Name = "Default" });
             _settings.SelectedProfile = "Default";
         }
-        if (string.IsNullOrWhiteSpace(_settings.GitHubRepository)) _settings.GitHubRepository = "https://github.com/marlon82/SNMP-MibBrowser";
         _language = _settings.Language; _dark = _settings.Dark;
     }
 
