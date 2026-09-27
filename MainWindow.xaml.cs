@@ -84,12 +84,17 @@ public partial class MainWindow : Window
         oid == "1.3.6.1.4.1" || oid.StartsWith("1.3.6.1.4.1.", StringComparison.Ordinal) ||
         oid == "1.3.6.1.3" || oid.StartsWith("1.3.6.1.3.", StringComparison.Ordinal);
 
-    private void RebuildTree(IEnumerable<MibNode> nodes)
+    private void RebuildTree(IEnumerable<MibNode> nodes, string? focusOid = null)
     {
         MibTree.Items.Clear();
         var expandedByDefault = new HashSet<string> { "1", "1.3", "1.3.6", "1.3.6.1", "1.3.6.1.2", "1.3.6.1.2.1", "1.3.6.1.2.1.1" };
         var nodeList = nodes.ToList();
-        var exact = nodeList.GroupBy(x => x.Oid).ToDictionary(x => x.Key, x => x.First());
+        // Resolve labels against the complete MIB catalog, not only the filtered
+        // result set. Otherwise parents of a search result fall back to numeric arcs.
+        var exact = _nodes.Concat(nodeList)
+            .Where(x => !string.IsNullOrWhiteSpace(x.Oid))
+            .GroupBy(x => x.Oid)
+            .ToDictionary(x => x.Key, x => x.First());
         var allOids = new HashSet<string>();
         foreach (var node in nodeList)
         {
@@ -109,10 +114,19 @@ public partial class MainWindow : Window
             // enrich details, but cannot rename the standard OID hierarchy.
             var name = labels.TryGetValue(oid, out var canonical) ? canonical : node?.Name ?? oid.Split('.').Last();
             var model = node ?? new MibNode { Name = name, Oid = oid, Module = "OID tree", Description = "Struktureller OID-Knoten", DescriptionEnglish = "Structural OID node" };
-            var item = new TreeViewItem { Header = name, Tag = model, ToolTip = oid, IsExpanded = expandedByDefault.Contains(oid) };
+            var expandsToFocus = !string.IsNullOrWhiteSpace(focusOid) &&
+                (focusOid == oid || focusOid.StartsWith(oid + ".", StringComparison.Ordinal));
+            var item = new TreeViewItem { Header = name, Tag = model, ToolTip = oid, IsExpanded = expandsToFocus || expandedByDefault.Contains(oid) };
             items[oid] = item;
             var cut = oid.LastIndexOf('.');
             if (cut > 0 && items.TryGetValue(oid[..cut], out var parent)) parent.Items.Add(item); else MibTree.Items.Add(item);
+        }
+
+        if (!string.IsNullOrWhiteSpace(focusOid) && items.TryGetValue(focusOid, out var focusedItem))
+        {
+            focusedItem.IsSelected = true;
+            focusedItem.Focus();
+            Dispatcher.BeginInvoke(() => focusedItem.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
         }
     }
 
@@ -137,8 +151,37 @@ public partial class MainWindow : Window
     {
         if (_nodes.Count == 0) return;
         var q = SearchBox.Text.Trim();
-        RebuildTree(string.IsNullOrEmpty(q) ? _nodes : _nodes.Where(x => x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || x.Oid.Contains(q) || x.Description.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        if (string.IsNullOrEmpty(q))
+        {
+            RebuildTree(_nodes);
+            return;
+        }
+
+        var normalizedOid = q.TrimStart('.');
+        if (IsNumericOid(normalizedOid))
+        {
+            // An entered OID may include a scalar or table index that has no MIB
+            // node of its own. Select the most specific known object in that case.
+            var match = _nodes
+                .Where(x => normalizedOid == x.Oid || normalizedOid.StartsWith(x.Oid + ".", StringComparison.Ordinal))
+                .OrderByDescending(x => x.Oid.Split('.').Length)
+                .FirstOrDefault();
+            if (match != null)
+            {
+                RebuildTree([match], match.Oid);
+                return;
+            }
+        }
+
+        RebuildTree(_nodes.Where(x =>
+            x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+            x.Oid.Contains(normalizedOid, StringComparison.Ordinal) ||
+            x.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+            x.DescriptionEnglish.Contains(q, StringComparison.OrdinalIgnoreCase)));
     }
+
+    private static bool IsNumericOid(string value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Split('.').All(part => part.Length > 0 && part.All(char.IsDigit));
     private void ClearSearch_Click(object sender, RoutedEventArgs e) { SearchBox.Clear(); SearchBox.Focus(); }
 
     private void MibTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
