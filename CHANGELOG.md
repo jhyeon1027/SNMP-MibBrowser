@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 build11
+
+- Expand the complete MIB tree path when searching for a numeric OID.
+- Resolve indexed instance OIDs to the most specific known MIB object.
+- Preserve symbolic MIB names for all known nodes along filtered search paths.
+- Use the official SNMP MibBrowser GitHub repository automatically for update checks.
+- Remove the repository input from the updater while retaining optional pre-release support.
+- Publish all GitHub-facing project documentation in English.
+
 ## 1.0.0 build10
 
 - Initial public release.
