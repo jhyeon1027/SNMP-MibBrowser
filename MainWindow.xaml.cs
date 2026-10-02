@@ -189,6 +189,7 @@ public partial class MainWindow : Window
         if (e.NewValue is not TreeViewItem { Tag: MibNode n }) return;
         _currentOid = QueryOidForNode(n);
         SetOidBox.Text = QueryOidForNode(n);
+        QueryOidBox.Text = _currentOid;
         var description = _language == "en" && !string.IsNullOrWhiteSpace(n.DescriptionEnglish) ? n.DescriptionEnglish : n.Description;
         DetailsBox.Text = _language == "de"
             ? $"Name:         {n.Name}\r\nOID:          {n.Oid}\r\nModul:        {n.Module}\r\nSyntax:       {n.Syntax}\r\nZugriff:      {n.Access}\r\n\r\nBeschreibung:\r\n{description}"
@@ -205,8 +206,40 @@ public partial class MainWindow : Window
         ResultsTab.IsSelected = true;
         await RunQueryAsync("GET", ct => _snmp.GetAsync(Options(), sysDescrOid, false, ct));
     }
-    private async void GetNext_Click(object sender, RoutedEventArgs e) => await RunQueryAsync("GET NEXT", ct => _snmp.GetAsync(Options(), _currentOid, true, ct));
-    private async void Walk_Click(object sender, RoutedEventArgs e) => await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), _currentOid, ct));
+    private async void QueryOidBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter || _cts != null) return;
+        e.Handled = true;
+        ResultsTab.IsSelected = true;
+        await ExecuteGetAsync();
+    }
+    private async void GetNext_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetQueryOid(out var oid)) return;
+        await RunQueryAsync("GET NEXT", ct => _snmp.GetAsync(Options(), oid, true, ct));
+    }
+    private async void Walk_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetQueryOid(out var oid)) return;
+        await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), oid, ct));
+    }
+
+    // Reads the toolbar OID so that objects missing from the MIB tree
+    // (e.g. vendor enterprise OIDs) can be queried directly.
+    private bool TryGetQueryOid(out string oid)
+    {
+        oid = QueryOidBox.Text.Trim().TrimStart('.');
+        if (!IsNumericOid(oid) || !oid.Split('.').All(part => uint.TryParse(part, out _)))
+        {
+            var message = Tr($"Ungültige OID: \"{QueryOidBox.Text.Trim()}\". Erwartet wird eine numerische OID wie 1.3.6.1.2.1.1.1.0.", $"Invalid OID: \"{QueryOidBox.Text.Trim()}\". Expected a numeric OID such as 1.3.6.1.2.1.1.1.0.");
+            StatusText.Text = message;
+            Log($"{Tr("FEHLER", "ERROR")}: {message}");
+            return false;
+        }
+        _currentOid = oid;
+        QueryOidBox.Text = oid;
+        return true;
+    }
     private async void ApplySet_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(Tr("Der SET-Befehl verändert einen Wert auf dem Zielgerät. Fortfahren?", "The SET operation changes a value on the target device. Continue?"), Tr("SNMP SET bestätigen", "Confirm SNMP SET"), MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
@@ -216,17 +249,18 @@ public partial class MainWindow : Window
 
     private async Task ExecuteGetAsync()
     {
-        var oid = NormalizeGetOid(_currentOid);
+        if (!TryGetQueryOid(out var input)) return;
+        var oid = NormalizeGetOid(input);
         _currentOid = oid;
+        QueryOidBox.Text = oid;
         await RunQueryAsync("GET", ct => _snmp.GetAsync(Options(), oid, false, ct));
     }
 
     private async void MibTree_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (MibTree.SelectedItem is not TreeViewItem { Tag: MibNode node }) return;
-        _currentOid = QueryOidForNode(node);
-        if (IsScalar(node)) await ExecuteGetAsync();
-        else await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), node.Oid, ct));
+        if (IsScalar(node)) { QueryOidBox.Text = QueryOidForNode(node); await ExecuteGetAsync(); }
+        else { _currentOid = QueryOidBox.Text = node.Oid; await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), node.Oid, ct)); }
         e.Handled = true;
     }
 
@@ -237,9 +271,9 @@ public partial class MainWindow : Window
         while(current!=null && current is not TreeViewItem) current=VisualTreeHelper.GetParent(current);
         if(current is TreeViewItem item){item.IsSelected=true;item.Focus();}
     }
-    private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidForNode(n); await ExecuteGetAsync(); } }
-    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=n.Oid; await RunQueryAsync("GET NEXT",ct=>_snmp.GetAsync(Options(),n.Oid,true,ct)); } }
-    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=n.Oid; await RunQueryAsync("WALK",ct=>_snmp.WalkAsync(Options(),n.Oid,ct)); } }
+    private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { QueryOidBox.Text=QueryOidForNode(n); await ExecuteGetAsync(); } }
+    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunQueryAsync("GET NEXT",ct=>_snmp.GetAsync(Options(),n.Oid,true,ct)); } }
+    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunQueryAsync("WALK",ct=>_snmp.WalkAsync(Options(),n.Oid,ct)); } }
     private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) Clipboard.SetText(n.Oid); }
     private void ContextDetails_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode()!=null) DetailsPanel.IsExpanded=true; }
 
@@ -555,6 +589,7 @@ public partial class MainWindow : Window
         ProfileLabel.Text = ToolbarProfileLabel.Text = de ? "Profil" : "Profile"; SettingsButton.Content = de ? "⚙  Optionen" : "⚙  Options"; UpdateButton.Content = de ? "↻  Updates" : "↻  Updates";
         SearchLabel.Text = de ? "MIB-Baum durchsuchen" : "Search MIB tree"; ClearSearchButton.ToolTip = de ? "Suche löschen" : "Clear search"; ContextCopyItem.Header = de ? "OID kopieren" : "Copy OID"; ContextDetailsItem.Header = de ? "Details anzeigen" : "Show details";
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
+        QueryOidLabel.Text = "OID"; QueryOidBox.ToolTip = de ? "Numerische OID (z. B. 1.3.6.1.4.1.9999.1.1.0)" : "Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)";
         ThemeButton.Content = _dark ? (de ? "☀  Hell" : "☀  Light") : (de ? "☾  Dunkel" : "☾  Dark");
         ResultsGrid.Columns[0].Header = de ? "Zeit" : "Time"; ResultsGrid.Columns[1].Header = de ? "Vorgang" : "Operation"; ResultsGrid.Columns[2].Header = "OID"; ResultsGrid.Columns[3].Header = "Name"; ResultsGrid.Columns[4].Header = de ? "Typ" : "Type"; ResultsGrid.Columns[5].Header = de ? "Wert" : "Value"; ResultsGrid.Columns[6].Header = de ? "Dauer" : "Duration";
         InterfacesGrid.Columns[1].Header = "Name"; InterfacesGrid.Columns[2].Header = de ? "Typ" : "Type"; InterfacesGrid.Columns[4].Header = de ? "Geschwindigkeit" : "Speed"; InterfacesGrid.Columns[6].Header = de ? "Administrativ" : "Admin"; InterfacesGrid.Columns[7].Header = de ? "Betriebsstatus" : "Operational";

@@ -12,6 +12,7 @@
     <TextBlock x:Name="ToolbarTargetLabel2" Text="Target" VerticalAlignment="Center" Margin="3,0,2,0"/><TextBox x:Name="ToolbarHostBox" Width="175" Text="127.0.0.1" VerticalContentAlignment="Center" TextChanged="ToolbarHostBox_TextChanged" KeyDown="HostBox_KeyDown"/>
     <TextBlock x:Name="ToolbarProfileLabel" Text="Profile" VerticalAlignment="Center" Margin="8,0,2,0"/><ComboBox x:Name="ToolbarProfileBox" Width="155" HorizontalContentAlignment="Left" SelectionChanged="ToolbarProfileBox_SelectionChanged"/>
     <Separator Margin="10,2"/>
+    <TextBlock x:Name="QueryOidLabel" Text="OID" VerticalAlignment="Center" Margin="3,0,2,0"/><TextBox x:Name="QueryOidBox" Width="260" Text="1.3.6.1.2.1.1.1.0" VerticalContentAlignment="Center" ToolTip="Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)" KeyDown="QueryOidBox_KeyDown"/>
     <Button x:Name="GetButton" Click="Get_Click" Content="↓  GET"/><Button x:Name="NextButton" Click="GetNext_Click" Content="↧  GET NEXT"/><Button x:Name="WalkButton" Click="Walk_Click" Content="≋  WALK"/>
     <Button x:Name="CancelButton" Content="Cancel" Click="Cancel_Click" IsEnabled="False"/><Separator Margin="10,2"/><Button x:Name="ClearButton" Click="ClearResults_Click" Content="⌫  Clear"/><Button x:Name="SettingsButton" Click="Settings_Click" Content="⚙  Options"/><Button x:Name="UpdateButton" Click="Update_Click" Content="↻  Updates"/><Button x:Name="AboutButton" Click="About_Click" Content="ⓘ  About"/>
    </StackPanel>
