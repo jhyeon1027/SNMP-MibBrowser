@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 build12
+
+- Add a toolbar OID field so GET, GET NEXT, and WALK can query OIDs that are not in the MIB tree; Enter runs GET.
+- Selecting a MIB tree node fills the OID field, and invalid OIDs are reported without sending a request.
+- Add a WALK depth limit (default 4, 0 = unlimited); deeper subtrees show only their first object.
+- GET NEXT writes the returned OID back into the OID field so it can be pressed repeatedly.
+- Show SNMPv3 auth and privacy keys as a tooltip when hovering the password fields.
+- Check this fork (jhyeon1027/SNMP-MibBrowser) for updates.
+
 ## 1.0.1 build11
 
 - Expand the complete MIB tree path when searching for a numeric OID.
