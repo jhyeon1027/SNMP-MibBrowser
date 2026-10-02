@@ -216,12 +216,51 @@ public partial class MainWindow : Window
     private async void GetNext_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetQueryOid(out var oid)) return;
-        await RunQueryAsync("GET NEXT", ct => _snmp.GetAsync(Options(), oid, true, ct));
+        await RunGetNextAsync(oid);
     }
     private async void Walk_Click(object sender, RoutedEventArgs e)
     {
         if (!TryGetQueryOid(out var oid)) return;
-        await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), oid, ct));
+        await RunWalkAsync(oid);
+    }
+
+    // Puts the returned OID into the toolbar so GET NEXT can be pressed repeatedly.
+    private async Task RunGetNextAsync(string oid)
+    {
+        Variable? next = null;
+        await RunQueryAsync("GET NEXT", async ct =>
+        {
+            var answer = await _snmp.GetAsync(Options(), oid, true, ct);
+            next = answer.FirstOrDefault();
+            return answer;
+        });
+        if (next == null || next.Data.TypeCode == SnmpType.EndOfMibView) return;
+        _currentOid = QueryOidBox.Text = next.Id.ToString();
+    }
+
+    private async Task RunWalkAsync(string oid)
+    {
+        if (!TryGetWalkDepth(out var depth)) return;
+        var truncated = 0;
+        await RunQueryAsync("WALK", async ct =>
+        {
+            var answer = await _snmp.WalkAsync(Options(), oid, ct, depth);
+            var rootArcs = oid.Split('.').Length;
+            if (depth > 0) truncated = answer.Count(v => v.Id.ToString().Split('.').Length - rootArcs > depth);
+            return answer;
+        });
+        if (truncated > 0) Log(Tr($"WALK {oid}: {truncated} Teilbäume unterhalb von Tiefe {depth} übersprungen (nur erstes Objekt angezeigt).", $"WALK {oid}: {truncated} subtrees below depth {depth} skipped (first object shown only)."));
+    }
+
+    private bool TryGetWalkDepth(out int depth)
+    {
+        var text = WalkDepthBox.Text.Trim();
+        if (text.Length == 0) { depth = 0; return true; }
+        if (int.TryParse(text, out depth) && depth >= 0) return true;
+        var message = Tr($"Ungültige WALK-Tiefe: \"{text}\". Erwartet wird eine Zahl ≥ 0 (0 = unbegrenzt).", $"Invalid WALK depth: \"{text}\". Expected a number ≥ 0 (0 = unlimited).");
+        StatusText.Text = message;
+        Log($"{Tr("FEHLER", "ERROR")}: {message}");
+        return false;
     }
 
     // Reads the toolbar OID so that objects missing from the MIB tree
@@ -260,7 +299,7 @@ public partial class MainWindow : Window
     {
         if (MibTree.SelectedItem is not TreeViewItem { Tag: MibNode node }) return;
         if (IsScalar(node)) { QueryOidBox.Text = QueryOidForNode(node); await ExecuteGetAsync(); }
-        else { _currentOid = QueryOidBox.Text = node.Oid; await RunQueryAsync("WALK", ct => _snmp.WalkAsync(Options(), node.Oid, ct)); }
+        else { _currentOid = QueryOidBox.Text = node.Oid; await RunWalkAsync(node.Oid); }
         e.Handled = true;
     }
 
@@ -272,8 +311,8 @@ public partial class MainWindow : Window
         if(current is TreeViewItem item){item.IsSelected=true;item.Focus();}
     }
     private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { QueryOidBox.Text=QueryOidForNode(n); await ExecuteGetAsync(); } }
-    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunQueryAsync("GET NEXT",ct=>_snmp.GetAsync(Options(),n.Oid,true,ct)); } }
-    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunQueryAsync("WALK",ct=>_snmp.WalkAsync(Options(),n.Oid,ct)); } }
+    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunGetNextAsync(n.Oid); } }
+    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunWalkAsync(n.Oid); } }
     private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) Clipboard.SetText(n.Oid); }
     private void ContextDetails_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode()!=null) DetailsPanel.IsExpanded=true; }
 
@@ -589,6 +628,7 @@ public partial class MainWindow : Window
         ProfileLabel.Text = ToolbarProfileLabel.Text = de ? "Profil" : "Profile"; SettingsButton.Content = de ? "⚙  Optionen" : "⚙  Options"; UpdateButton.Content = de ? "↻  Updates" : "↻  Updates";
         SearchLabel.Text = de ? "MIB-Baum durchsuchen" : "Search MIB tree"; ClearSearchButton.ToolTip = de ? "Suche löschen" : "Clear search"; ContextCopyItem.Header = de ? "OID kopieren" : "Copy OID"; ContextDetailsItem.Header = de ? "Details anzeigen" : "Show details";
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
+        WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
         QueryOidLabel.Text = "OID"; QueryOidBox.ToolTip = de ? "Numerische OID (z. B. 1.3.6.1.4.1.9999.1.1.0)" : "Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)";
         ThemeButton.Content = _dark ? (de ? "☀  Hell" : "☀  Light") : (de ? "☾  Dunkel" : "☾  Dark");
         ResultsGrid.Columns[0].Header = de ? "Zeit" : "Time"; ResultsGrid.Columns[1].Header = de ? "Vorgang" : "Operation"; ResultsGrid.Columns[2].Header = "OID"; ResultsGrid.Columns[3].Header = "Name"; ResultsGrid.Columns[4].Header = de ? "Typ" : "Type"; ResultsGrid.Columns[5].Header = de ? "Wert" : "Value"; ResultsGrid.Columns[6].Header = de ? "Dauer" : "Duration";

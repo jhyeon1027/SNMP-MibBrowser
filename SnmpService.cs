@@ -10,16 +10,28 @@ public sealed class SnmpService
     public Task<IList<Variable>> GetAsync(SnmpOptions o, string oid, bool next, CancellationToken ct) =>
         Task.Run(() => Send(o, oid, next ? "NEXT" : "GET"), ct);
 
-    public Task<IList<Variable>> WalkAsync(SnmpOptions o, string oid, CancellationToken ct) => Task.Run(() =>
+    // maxDepth > 0 limits the walk to that many arcs below oid. For each deeper
+    // subtree only its first object is kept, then the rest of it is skipped.
+    public Task<IList<Variable>> WalkAsync(SnmpOptions o, string oid, CancellationToken ct, int maxDepth = 0) => Task.Run(() =>
     {
         var results = new List<Variable>();
+        var rootArcs = oid.Split('.').Length;
         var current = oid;
+        string? skippedPrefix = null;
         for (var i = 0; i < 10000; i++)
         {
             ct.ThrowIfCancellationRequested();
             var answer = Send(o, current, "NEXT");
             if (answer.Count == 0 || !answer[0].Id.ToString().StartsWith(oid + ".", StringComparison.Ordinal) || answer[0].Id.ToString() == current) break;
-            results.Add(answer[0]); current = answer[0].Id.ToString();
+            var id = answer[0].Id.ToString();
+            var arcs = id.Split('.');
+            var prefix = maxDepth > 0 && arcs.Length - rootArcs > maxDepth ? string.Join('.', arcs.Take(rootArcs + maxDepth)) : null;
+            if (prefix == null || prefix != skippedPrefix) results.Add(answer[0]);
+            skippedPrefix = prefix;
+            // GETNEXT on prefix.4294967295 (largest sub-identifier) returns the first object after that
+            // subtree. Only jump when that is ahead of the current object, otherwise step normally.
+            var jump = prefix + "." + uint.MaxValue;
+            current = prefix != null && CompareOids(id, jump) < 0 ? jump : id;
         }
         return (IList<Variable>)results;
     }, ct);
@@ -86,6 +98,12 @@ public sealed class SnmpService
         return new IPEndPoint(ip, o.Port);
     }
     private static string Normalize(string oid) => oid.Trim().TrimStart('.');
+    private static int CompareOids(string a, string b)
+    {
+        var x = a.Split('.').Select(uint.Parse).ToArray(); var y = b.Split('.').Select(uint.Parse).ToArray();
+        for (var i = 0; i < Math.Min(x.Length, y.Length); i++) if (x[i] != y[i]) return x[i].CompareTo(y[i]);
+        return x.Length.CompareTo(y.Length);
+    }
     private static ISnmpData MakeData(string type, string value) => type switch
     {
         "Integer32" => new Integer32(int.Parse(value)), "Gauge32" => new Gauge32(uint.Parse(value)),

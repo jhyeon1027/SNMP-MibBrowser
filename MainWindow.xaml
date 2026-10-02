@@ -14,6 +14,7 @@
     <Separator Margin="10,2"/>
     <TextBlock x:Name="QueryOidLabel" Text="OID" VerticalAlignment="Center" Margin="3,0,2,0"/><TextBox x:Name="QueryOidBox" Width="260" Text="1.3.6.1.2.1.1.1.0" VerticalContentAlignment="Center" ToolTip="Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)" KeyDown="QueryOidBox_KeyDown"/>
     <Button x:Name="GetButton" Click="Get_Click" Content="↓  GET"/><Button x:Name="NextButton" Click="GetNext_Click" Content="↧  GET NEXT"/><Button x:Name="WalkButton" Click="Walk_Click" Content="≋  WALK"/>
+    <TextBlock x:Name="WalkDepthLabel" Text="Depth" VerticalAlignment="Center" Margin="3,0,2,0"/><TextBox x:Name="WalkDepthBox" Width="50" Text="4" VerticalContentAlignment="Center" ToolTip="Maximum WALK depth below the OID (0 = unlimited)"/>
     <Button x:Name="CancelButton" Content="Cancel" Click="Cancel_Click" IsEnabled="False"/><Separator Margin="10,2"/><Button x:Name="ClearButton" Click="ClearResults_Click" Content="⌫  Clear"/><Button x:Name="SettingsButton" Click="Settings_Click" Content="⚙  Options"/><Button x:Name="UpdateButton" Click="Update_Click" Content="↻  Updates"/><Button x:Name="AboutButton" Click="About_Click" Content="ⓘ  About"/>
    </StackPanel>
   </Border>
