@@ -9,7 +9,7 @@
     <AssemblyName>SNMP MibBrowser</AssemblyName>
     <Product>SNMP MibBrowser</Product>
     <Description>Open-source SNMP MIB browser for Windows</Description>
-    <RepositoryUrl>https://github.com/marlon82/SNMP-MibBrowser</RepositoryUrl>
+    <RepositoryUrl>https://github.com/jhyeon1027/SNMP-MibBrowser</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Version>1.0.1</Version>
     <AssemblyVersion>1.0.1.11</AssemblyVersion>

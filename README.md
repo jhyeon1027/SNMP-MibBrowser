@@ -49,7 +49,7 @@ Alternatively, download and run the published `SNMP MibBrowser.exe`.
 
 ## Updates and GitHub releases
 
-Select **Updates** in the main window to open the GitHub update checker. The repository [`marlon82/SNMP-MibBrowser`](https://github.com/marlon82/SNMP-MibBrowser) is configured by default. Pre-release versions can be included or excluded separately. See [`RELEASE.md`](RELEASE.md) for details about publishing and the automated tag workflow.
+Select **Updates** in the main window to open the GitHub update checker. The repository [`jhyeon1027/SNMP-MibBrowser`](https://github.com/jhyeon1027/SNMP-MibBrowser) is configured by default. Pre-release versions can be included or excluded separately. See [`RELEASE.md`](RELEASE.md) for details about publishing and the automated tag workflow.
 
 > [!NOTE]
 > UDP port 161 must be reachable between the computer and the target device. SNMP SET modifies the target device and requires a write-enabled community or an appropriately configured SNMPv3 user.

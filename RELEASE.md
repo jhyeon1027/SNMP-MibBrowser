@@ -2,7 +2,7 @@
 
 ## One-time setup
 
-1. Use the public repository `https://github.com/marlon82/SNMP-MibBrowser`.
+1. Use the public repository `https://github.com/jhyeon1027/SNMP-MibBrowser`.
 2. Use this project directory as the repository root and push it to the `main` branch.
 3. The update URL and `RepositoryUrl` are already configured for this repository.
 

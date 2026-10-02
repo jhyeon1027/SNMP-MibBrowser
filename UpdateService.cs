@@ -7,7 +7,7 @@ namespace SnmpMibBrowser;
 
 public sealed class UpdateService
 {
-    private const string RepositorySlug = "marlon82/SNMP-MibBrowser";
+    private const string RepositorySlug = "jhyeon1027/SNMP-MibBrowser";
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(20) };
 
     public UpdateService() => _http.DefaultRequestHeaders.UserAgent.ParseAdd("SNMP-MibBrowser/1.0");
