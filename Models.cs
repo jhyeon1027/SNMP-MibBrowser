@@ -25,7 +25,7 @@ public sealed record ArpRow(string Address, string Mac, string Interface, string
 public sealed record LldpRow(string LocalPort, string ChassisId, string PortId, string PortDescription, string SystemName, string SystemDescription);
 
 public sealed record SnmpOptions(string Host, int Port, string Version, string Community, string User,
-    string AuthType, string AuthPassword, string PrivacyType, string PrivacyPassword, string Context, int Timeout = 3000);
+    string AuthType, string AuthPassword, string PrivacyType, string PrivacyPassword, string Context, int Timeout = 3000, int Retries = 1);
 
 public sealed class SnmpProfile
 {
@@ -39,6 +39,8 @@ public sealed class SnmpProfile
     public string PrivacyType { get; set; } = "Keine";
     public string PrivacyPassword { get; set; } = "";
     public string Context { get; set; } = "";
+    public int Timeout { get; set; } = 3000;
+    public int Retries { get; set; } = 1;
     public override string ToString() => Name;
 }
 

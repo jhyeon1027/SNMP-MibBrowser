@@ -244,13 +244,16 @@ public partial class MainWindow : Window
         var truncated = 0;
         await RunQueryAsync("WALK", async ct =>
         {
-            var answer = await _snmp.WalkAsync(Options(), oid, ct, depth);
+            var answer = await _snmp.WalkAsync(Options(), oid, ct, depth, () => Dispatcher.Invoke(() => LogWalkLimit(oid)));
             var rootArcs = oid.Split('.').Length;
             if (depth > 0) truncated = answer.Count(v => v.Id.ToString().Split('.').Length - rootArcs > depth);
             return answer;
         });
         if (truncated > 0) Log(Tr($"WALK {oid}: {truncated} Teilbäume unterhalb von Tiefe {depth} übersprungen (nur erstes Objekt angezeigt).", $"WALK {oid}: {truncated} subtrees below depth {depth} skipped (first object shown only)."));
     }
+
+    private void LogWalkLimit(string oid) =>
+        Log(Tr($"WARNUNG: WALK {oid} nach {SnmpService.MaxWalkSteps:N0} Anfragen abgebrochen; das Ergebnis ist unvollständig.", $"WARNING: WALK {oid} stopped after {SnmpService.MaxWalkSteps:N0} requests; the result is incomplete."));
 
     private bool TryGetWalkDepth(out int depth)
     {
@@ -268,6 +271,7 @@ public partial class MainWindow : Window
     private bool TryGetQueryOid(out string oid)
     {
         oid = QueryOidBox.Text.Trim().TrimStart('.');
+        if (RejectWhileBusy()) return false;
         if (!IsNumericOid(oid) || !oid.Split('.').All(part => uint.TryParse(part, out _)))
         {
             var message = Tr($"Ungültige OID: \"{QueryOidBox.Text.Trim()}\". Erwartet wird eine numerische OID wie 1.3.6.1.2.1.1.1.0.", $"Invalid OID: \"{QueryOidBox.Text.Trim()}\". Expected a numeric OID such as 1.3.6.1.2.1.1.1.0.");
@@ -281,6 +285,7 @@ public partial class MainWindow : Window
     }
     private async void ApplySet_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectWhileBusy()) return;
         if (MessageBox.Show(Tr("Der SET-Befehl verändert einen Wert auf dem Zielgerät. Fortfahren?", "The SET operation changes a value on the target device. Continue?"), Tr("SNMP SET bestätigen", "Confirm SNMP SET"), MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         await RunQueryAsync("SET", ct => _snmp.SetAsync(Options(), SetOidBox.Text, Selected(DataTypeBox), SetValueBox.Text, ct));
     }
@@ -297,7 +302,7 @@ public partial class MainWindow : Window
 
     private async void MibTree_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (MibTree.SelectedItem is not TreeViewItem { Tag: MibNode node }) return;
+        if (MibTree.SelectedItem is not TreeViewItem { Tag: MibNode node } || RejectWhileBusy()) return;
         if (IsScalar(node)) { QueryOidBox.Text = QueryOidForNode(node); await ExecuteGetAsync(); }
         else { _currentOid = QueryOidBox.Text = node.Oid; await RunWalkAsync(node.Oid); }
         e.Handled = true;
@@ -310,9 +315,9 @@ public partial class MainWindow : Window
         while(current!=null && current is not TreeViewItem) current=VisualTreeHelper.GetParent(current);
         if(current is TreeViewItem item){item.IsSelected=true;item.Focus();}
     }
-    private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { QueryOidBox.Text=QueryOidForNode(n); await ExecuteGetAsync(); } }
-    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunGetNextAsync(n.Oid); } }
-    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) { _currentOid=QueryOidBox.Text=n.Oid; await RunWalkAsync(n.Oid); } }
+    private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { QueryOidBox.Text=QueryOidForNode(n); await ExecuteGetAsync(); } }
+    private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { _currentOid=QueryOidBox.Text=n.Oid; await RunGetNextAsync(n.Oid); } }
+    private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { _currentOid=QueryOidBox.Text=n.Oid; await RunWalkAsync(n.Oid); } }
     private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) Clipboard.SetText(n.Oid); }
     private void ContextDetails_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode()!=null) DetailsPanel.IsExpanded=true; }
 
@@ -379,13 +384,14 @@ public partial class MainWindow : Window
 
     private async Task<List<Dictionary<string,ISnmpData>>?> LoadColumnsAsync(string feature, IReadOnlyList<string> roots)
     {
+        if (RejectWhileBusy()) return null;
         _cts = new CancellationTokenSource(); SetBusy(true, $"{feature}…");
         try
         {
             var columns = new List<Dictionary<string,ISnmpData>>();
             foreach (var root in roots)
             {
-                var values = await _snmp.WalkAsync(Options(), root, _cts.Token);
+                var values = await _snmp.WalkAsync(Options(), root, _cts.Token, limitReached: () => Dispatcher.Invoke(() => LogWalkLimit(root)));
                 columns.Add(values.ToDictionary(v => v.Id.ToString()[(root.Length + 1)..], v => v.Data));
             }
             StatusText.Text = _language == "de" ? $"{feature}: {Keys(columns).Count()} Einträge" : $"{feature}: {Keys(columns).Count()} entries";
@@ -447,8 +453,17 @@ public partial class MainWindow : Window
         return bytes.All(x => x is >= 32 and <= 126) ? System.Text.Encoding.UTF8.GetString(bytes) : Mac(value);
     }
 
+    // Only one query may run at a time; _cts is shared with the Cancel button.
+    private bool RejectWhileBusy()
+    {
+        if (_cts == null) return false;
+        StatusText.Text = Tr("Es läuft bereits eine Abfrage. Bitte warten oder abbrechen.", "A query is already running. Wait for it or cancel it.");
+        return true;
+    }
+
     private async Task RunQueryAsync(string operation, Func<CancellationToken, Task<IList<Variable>>> action)
     {
+        if (RejectWhileBusy()) return;
         _cts = new CancellationTokenSource(); SetBusy(true, Tr($"{operation} wird ausgeführt…", $"Running {operation}…"));
         var sw = Stopwatch.StartNew();
         try
@@ -492,8 +507,10 @@ public partial class MainWindow : Window
     private SnmpOptions Options()
     {
         _ = int.TryParse(PortBox.Text, out var port);
+        var profile = ProfileBox.SelectedItem as SnmpProfile;
         return new SnmpOptions(HostBox.Text.Trim(), port > 0 ? port : 161, Selected(VersionBox), CommunityBox.Text,
-            UserBox.Text, Selected(AuthBox), AuthPasswordBox.Password, Selected(PrivacyBox), PrivacyPasswordBox.Password, ContextBox.Text);
+            UserBox.Text, Selected(AuthBox), AuthPasswordBox.Password, Selected(PrivacyBox), PrivacyPasswordBox.Password, ContextBox.Text,
+            profile?.Timeout ?? 3000, profile?.Retries ?? 1);
     }
     private static string Selected(ComboBox box) => (box.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
     private void SetBusy(bool busy, string text) { BusyBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed; CancelButton.IsEnabled = busy; StatusText.Text = text; }

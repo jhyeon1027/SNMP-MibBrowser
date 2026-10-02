@@ -7,22 +7,26 @@ namespace SnmpMibBrowser;
 
 public sealed class SnmpService
 {
+    public const int MaxWalkSteps = 10000;
+
     public Task<IList<Variable>> GetAsync(SnmpOptions o, string oid, bool next, CancellationToken ct) =>
         Task.Run(() => Send(o, oid, next ? "NEXT" : "GET"), ct);
 
     // maxDepth > 0 limits the walk to that many arcs below oid. For each deeper
     // subtree only its first object is kept, then the rest of it is skipped.
-    public Task<IList<Variable>> WalkAsync(SnmpOptions o, string oid, CancellationToken ct, int maxDepth = 0) => Task.Run(() =>
+    // limitReached is invoked when the walk stops at MaxWalkSteps before reaching the end of the subtree.
+    public Task<IList<Variable>> WalkAsync(SnmpOptions o, string oid, CancellationToken ct, int maxDepth = 0, Action? limitReached = null) => Task.Run(() =>
     {
         var results = new List<Variable>();
         var rootArcs = oid.Split('.').Length;
         var current = oid;
         string? skippedPrefix = null;
-        for (var i = 0; i < 10000; i++)
+        var completed = false;
+        for (var i = 0; i < MaxWalkSteps; i++)
         {
             ct.ThrowIfCancellationRequested();
             var answer = Send(o, current, "NEXT");
-            if (answer.Count == 0 || !answer[0].Id.ToString().StartsWith(oid + ".", StringComparison.Ordinal) || answer[0].Id.ToString() == current) break;
+            if (answer.Count == 0 || !answer[0].Id.ToString().StartsWith(oid + ".", StringComparison.Ordinal) || answer[0].Id.ToString() == current) { completed = true; break; }
             var id = answer[0].Id.ToString();
             var arcs = id.Split('.');
             var prefix = maxDepth > 0 && arcs.Length - rootArcs > maxDepth ? string.Join('.', arcs.Take(rootArcs + maxDepth)) : null;
@@ -33,6 +37,7 @@ public sealed class SnmpService
             var jump = prefix + "." + uint.MaxValue;
             current = prefix != null && CompareOids(id, jump) < 0 ? jump : id;
         }
+        if (!completed) limitReached?.Invoke();
         return (IList<Variable>)results;
     }, ct);
 
@@ -44,7 +49,17 @@ public sealed class SnmpService
         return Messenger.Set(o.Version == "v1" ? VersionCode.V1 : VersionCode.V2, endpoint, new OctetString(o.Community), [variable], o.Timeout);
     }, ct);
 
+    // GET/GETNEXT are retried on timeout. SET is not, to avoid writing twice.
     private IList<Variable> Send(SnmpOptions o, string oid, string operation)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return SendOnce(o, oid, operation); }
+            catch (Lextm.SharpSnmpLib.Messaging.TimeoutException) when (attempt < o.Retries) { }
+        }
+    }
+
+    private IList<Variable> SendOnce(SnmpOptions o, string oid, string operation)
     {
         var vars = new List<Variable> { new(new ObjectIdentifier(Normalize(oid))) };
         if (o.Version == "v3") return SendV3(o, vars, operation);
