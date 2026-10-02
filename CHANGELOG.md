@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 build13
+
+- Allow only one query at a time; starting another query while one is running is rejected with a status message.
+- Log unhandled errors to `%LOCALAPPDATA%\SNMP-MibBrowser\error.log` and keep the application running after UI errors.
+- Add per-profile timeout (ms) and retry settings; GET, GET NEXT, and WALK requests are retried on timeout (SET is not).
+- Warn in the log when a WALK or device table stops at the 10,000-request limit and the result is incomplete.
+
 ## 1.0.2 build12
 
 - Add a toolbar OID field so GET, GET NEXT, and WALK can query OIDs that are not in the MIB tree; Enter runs GET.

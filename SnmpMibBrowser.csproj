@@ -11,9 +11,9 @@
     <Description>Open-source SNMP MIB browser for Windows</Description>
     <RepositoryUrl>https://github.com/jhyeon1027/SNMP-MibBrowser</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>1.0.2</Version>
-    <AssemblyVersion>1.0.2.12</AssemblyVersion>
-    <FileVersion>1.0.2.12</FileVersion>
+    <Version>1.0.3</Version>
+    <AssemblyVersion>1.0.3.13</AssemblyVersion>
+    <FileVersion>1.0.3.13</FileVersion>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

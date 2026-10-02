@@ -58,7 +58,7 @@
      <TabItem x:Name="LogTab" Header="Log"><TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="12" FontFamily="Consolas" BorderThickness="0"/></TabItem>
     </TabControl>
    </Grid>
-   <StatusBar Grid.Row="1" Grid.ColumnSpan="3" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource SubtleTextBrush}"><StatusBarItem HorizontalContentAlignment="Stretch"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"/><ProgressBar x:Name="BusyBar" Grid.Column="1" Width="120" Height="12" Margin="12,0" IsIndeterminate="True" Visibility="Collapsed"/><TextBlock x:Name="BuildText" Grid.Column="2" Text="1.0.2 build12" VerticalAlignment="Center" Margin="14,0,8,0" FontWeight="SemiBold"/></Grid></StatusBarItem></StatusBar>
+   <StatusBar Grid.Row="1" Grid.ColumnSpan="3" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource SubtleTextBrush}"><StatusBarItem HorizontalContentAlignment="Stretch"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"/><ProgressBar x:Name="BusyBar" Grid.Column="1" Width="120" Height="12" Margin="12,0" IsIndeterminate="True" Visibility="Collapsed"/><TextBlock x:Name="BuildText" Grid.Column="2" Text="1.0.3 build13" VerticalAlignment="Center" Margin="14,0,8,0" FontWeight="SemiBold"/></Grid></StatusBarItem></StatusBar>
   </Grid>
  </DockPanel>
 </Window>
