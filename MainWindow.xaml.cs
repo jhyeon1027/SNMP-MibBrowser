@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        FitToWorkArea();
         ResultsGrid.ItemsSource = _results;
         LoadSettings();
         RefreshProfiles();
@@ -40,6 +41,14 @@ public partial class MainWindow : Window
         Log(Tr("Anwendung gestartet.", "Application started."));
         Closing += (_, _) => SaveSettings();
         Loaded += async (_, _) => await LoadDefaultMibFolderAsync();
+    }
+
+    // Smaller or square screens: never open larger than the usable desktop area.
+    private void FitToWorkArea()
+    {
+        var area = SystemParameters.WorkArea;
+        MinWidth = Math.Min(MinWidth, area.Width); MinHeight = Math.Min(MinHeight, area.Height);
+        Width = Math.Min(Width, area.Width); Height = Math.Min(Height, area.Height);
     }
 
     private async void LoadMibs_Click(object sender, RoutedEventArgs e)
