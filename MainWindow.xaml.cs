@@ -633,6 +633,26 @@ public partial class MainWindow : Window
         CommunityBox.Text = _communities[0];
         UpdateCommunityListButton();
     }
+    // Writes the connection settings shown in the configuration panel (not the target,
+    // which is never part of a profile) back to the selected profile.
+    private void SaveToProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileBox.SelectedItem is not SnmpProfile p) return;
+        if (!int.TryParse(PortBox.Text, out var port) || port is < 1 or > 65535)
+        {
+            StatusText.Text = Tr("Ungültiger Port. Profil wurde nicht gespeichert.", "Invalid port. The profile was not saved.");
+            return;
+        }
+        if (MessageBox.Show(Tr($"Aktuelle SNMP-Einstellungen (Port, Version, Community-Liste, v3-Zugangsdaten) im Profil \"{p.Name}\" speichern?", $"Save the current SNMP settings (port, version, community list, v3 credentials) to profile \"{p.Name}\"?"),
+                Tr("Profil speichern", "Save profile"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        p.Port = port; p.Version = Selected(VersionBox);
+        p.Communities = _communities.Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList(); p.Community = p.Communities.FirstOrDefault() ?? "";
+        p.User = UserBox.Text; p.AuthType = Selected(AuthBox); p.AuthPassword = AuthPasswordBox.Password;
+        p.PrivacyType = Selected(PrivacyBox); p.PrivacyPassword = PrivacyPasswordBox.Password; p.Context = ContextBox.Text;
+        SaveSettings();
+        StatusText.Text = Tr($"Profil \"{p.Name}\" gespeichert.", $"Profile \"{p.Name}\" saved.");
+        Log(StatusText.Text);
+    }
     private void UpdateCommunityListButton()
     {
         var count = _communities.Count(x => x.Length > 0);
@@ -690,6 +710,7 @@ public partial class MainWindow : Window
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
         WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
         UpdateCommunityListButton();
+        SaveToProfileButton.Content = de ? "💾  Im Profil speichern" : "💾  Save to profile"; SaveToProfileButton.ToolTip = de ? "Diese SNMP-Einstellungen im ausgewählten Profil speichern" : "Save these SNMP settings to the selected profile";
         QueryOidLabel.Text = "OID"; QueryOidBox.ToolTip = de ? "Numerische OID (z. B. 1.3.6.1.4.1.9999.1.1.0)" : "Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)";
         ThemeButton.Content = _dark ? (de ? "☀  Hell" : "☀  Light") : (de ? "☾  Dunkel" : "☾  Dark");
         ResultsGrid.Columns[0].Header = de ? "Zeit" : "Time"; ResultsGrid.Columns[1].Header = de ? "Vorgang" : "Operation"; ResultsGrid.Columns[2].Header = "OID"; ResultsGrid.Columns[3].Header = "Name"; ResultsGrid.Columns[4].Header = de ? "Typ" : "Type"; ResultsGrid.Columns[5].Header = de ? "Wert" : "Value"; ResultsGrid.Columns[6].Header = de ? "Dauer" : "Duration";
