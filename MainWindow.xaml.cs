@@ -18,13 +18,16 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<QueryResult> _results = [];
     private List<MibNode> _nodes = [];
     private CancellationTokenSource? _cts;
-    private string _language = "de";
+    private string _language = "en";
     private bool _dark;
     private bool _syncingConnectionControls;
     private int? _loadedMibFileCount;
     private string _currentOid = "1.3.6.1.2.1.1.1.0";
     // v1/v2c communities tried in order; the first entry mirrors CommunityBox.
     private List<string> _communities = ["public"];
+    // Targets that answered, most recent first (kept across sessions in settings.json).
+    private List<string> _recentTargets = [];
+    private const int MaxRecentTargets = 20;
     private UserSettings _settings = new();
     private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "settings.json");
 
@@ -36,6 +39,7 @@ public partial class MainWindow : Window
             Log(Tr($"{host}: Community \"{community}\" akzeptiert (Versuch {index}/{total}).", $"{host}: community \"{community}\" accepted (attempt {index}/{total}).")));
         ResultsGrid.ItemsSource = _results;
         LoadSettings();
+        _recentTargets = [.. _settings.RecentTargets.Take(MaxRecentTargets)];
         RefreshProfiles();
         _nodes = StandardMibCatalog.Load().ToList();
         RebuildTree(_nodes);
@@ -407,6 +411,7 @@ public partial class MainWindow : Window
                 var values = await _snmp.WalkAsync(Options(), root, _cts.Token, limitReached: () => Dispatcher.Invoke(() => LogWalkLimit(root)));
                 columns.Add(values.ToDictionary(v => v.Id.ToString()[(root.Length + 1)..], v => v.Data));
             }
+            RememberTarget(HostBox.Text.Trim());
             StatusText.Text = _language == "de" ? $"{feature}: {Keys(columns).Count()} Einträge" : $"{feature}: {Keys(columns).Count()} entries";
             Log(Tr($"{feature}: Tabelle geladen.", $"{feature}: table loaded.")); return columns;
         }
@@ -478,6 +483,7 @@ public partial class MainWindow : Window
     {
         if (RejectWhileBusy()) return;
         _cts = new CancellationTokenSource(); SetBusy(true, Tr($"{operation} wird ausgeführt…", $"Running {operation}…"));
+        var host = HostBox.Text.Trim();
         var sw = Stopwatch.StartNew();
         try
         {
@@ -486,7 +492,7 @@ public partial class MainWindow : Window
             foreach (var v in answer)
             {
                 var oid = v.Id.ToString(); var node = ResolveNode(oid);
-                _results.Add(new(DateTime.Now.ToString("HH:mm:ss"), operation, oid, node?.Name ?? "", v.Data.TypeCode.ToString(), v.Data.ToString(), $"{sw.ElapsedMilliseconds} ms"));
+                _results.Add(new(DateTime.Now.ToString("HH:mm:ss"), operation, oid, node?.Name ?? "", v.Data.TypeCode.ToString(), DisplayValue(v.Data), $"{sw.ElapsedMilliseconds} ms"));
             }
             // WALK still fills the WALK table tab, but results are shown in Results,
             // scrolled to the first row of this walk.
@@ -495,6 +501,7 @@ public partial class MainWindow : Window
                 PopulateWalkTable(answer); DataTabs.SelectedItem = ResultsTab;
                 if (firstNew < _results.Count) ResultsGrid.ScrollIntoView(_results[firstNew]);
             }
+            RememberTarget(host);
             StatusText.Text = Tr($"{answer.Count} Antwort(en) in {sw.ElapsedMilliseconds} ms", $"{answer.Count} response(s) in {sw.ElapsedMilliseconds} ms");
             Log(Tr($"{operation} {_currentOid}: {answer.Count} Antwort(en), {sw.ElapsedMilliseconds} ms.", $"{operation} {_currentOid}: {answer.Count} response(s), {sw.ElapsedMilliseconds} ms."));
         }
@@ -503,6 +510,111 @@ public partial class MainWindow : Window
         finally { _cts.Dispose(); _cts = null; SetBusy(false, StatusText.Text); }
     }
 
+    // OctetStrings that are not clean UTF-8 text (MAC addresses, binary IDs) are shown as hex.
+    private static string DisplayValue(ISnmpData data)
+    {
+        if (data is not OctetString octets) return data.ToString();
+        var bytes = octets.GetRaw();
+        try
+        {
+            var text = new System.Text.UTF8Encoding(false, true).GetString(bytes).TrimEnd('\0');
+            if (!text.Any(ch => char.IsControl(ch) && ch is not ('\r' or '\n' or '\t'))) return text;
+        }
+        catch (System.Text.DecoderFallbackException) { }
+        return string.Join(":", bytes.Select(b => b.ToString("X2")));
+    }
+
+    private void RememberTarget(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return;
+        _recentTargets.RemoveAll(x => string.Equals(x, host, StringComparison.OrdinalIgnoreCase));
+        _recentTargets.Insert(0, host);
+        if (_recentTargets.Count > MaxRecentTargets) _recentTargets.RemoveRange(MaxRecentTargets, _recentTargets.Count - MaxRecentTargets);
+        SaveSettings();
+    }
+
+    private void RecentTargets_Click(object sender, RoutedEventArgs e) => ShowRecentTargets();
+    private void ToolbarHostBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Down) return;
+        e.Handled = true; ShowRecentTargets();
+    }
+    private void ShowRecentTargets()
+    {
+        var menu = new ContextMenu { PlacementTarget = ToolbarHostBox, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom, MinWidth = ToolbarHostBox.ActualWidth };
+        foreach (var target in _recentTargets)
+        {
+            var item = new MenuItem { Header = target };
+            item.Click += (_, _) => { ToolbarHostBox.Text = target; ToolbarHostBox.Focus(); ToolbarHostBox.CaretIndex = target.Length; };
+            menu.Items.Add(item);
+        }
+        if (_recentTargets.Count == 0) menu.Items.Add(new MenuItem { Header = Tr("(noch keine erfolgreichen Ziele)", "(no successful targets yet)"), IsEnabled = false });
+        else
+        {
+            menu.Items.Add(new Separator());
+            var clear = new MenuItem { Header = Tr("Verlauf löschen", "Clear history") };
+            clear.Click += (_, _) => { _recentTargets.Clear(); SaveSettings(); };
+            menu.Items.Add(clear);
+        }
+        menu.IsOpen = true;
+    }
+
+    // ---- Results copy helpers (context menu, Ctrl+C, double-click)
+    private List<QueryResult> SelectedResults() => _results.Where(ResultsGrid.SelectedItems.Contains).ToList();
+    private string SymbolicOid(string oid)
+    {
+        var node = ResolveNode(oid);
+        return node == null ? oid : node.Name + oid[node.Oid.Length..];
+    }
+    private bool CopyToClipboard(string text, int count)
+    {
+        if (text.Length == 0) return false;
+        if (!ClipboardText.TrySet(new System.Windows.Interop.WindowInteropHelper(this).Handle, text))
+        {
+            StatusText.Text = Tr("Zwischenablage ist belegt. Bitte erneut versuchen.", "The clipboard is busy. Please try again.");
+            return false;
+        }
+        StatusText.Text = Tr($"{count} Zeile(n) kopiert", $"Copied {count} row(s)");
+        return true;
+    }
+    private void CopyResults(Func<QueryResult, string> line)
+    {
+        var rows = SelectedResults();
+        CopyToClipboard(string.Join(Environment.NewLine, rows.Select(line)), rows.Count);
+    }
+    private void CopyResultValue_Click(object sender, RoutedEventArgs e) => CopyResults(r => r.Value);
+    private void CopyResultOid_Click(object sender, RoutedEventArgs e) => CopyResults(r => r.Oid);
+    private void CopyResultOidValue_Click(object sender, RoutedEventArgs e) => CopyResults(r => $"{SymbolicOid(r.Oid)} = {r.Value}");
+    private void CopyResultRows_Click(object sender, RoutedEventArgs e) => CopyResultRowsWithHeader();
+    private void CopyResultRowsWithHeader()
+    {
+        var rows = SelectedResults();
+        if (rows.Count == 0) return;
+        var header = string.Join("\t", ResultsGrid.Columns.Select(col => col.Header?.ToString() ?? ""));
+        CopyToClipboard(header + Environment.NewLine + string.Join(Environment.NewLine, rows.Select(r => string.Join("\t", r.Timestamp, r.Operation, r.Oid, r.Name, r.Type, r.Value, r.Duration))), rows.Count);
+    }
+    private void ResultsGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.C || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0) return;
+        e.Handled = true; CopyResultRowsWithHeader();
+    }
+    private void ResultsGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        DependencyObject? current = e.OriginalSource as DependencyObject;
+        while (current != null && current is not DataGridRow) current = VisualTreeHelper.GetParent(current);
+        if (current is not DataGridRow { Item: QueryResult row }) return;
+        if (CopyToClipboard(row.Value, 1)) StatusText.Text = Tr($"Wert kopiert: {Shorten(row.Value)}", $"Value copied: {Shorten(row.Value)}");
+        e.Handled = true;
+    }
+    // Right-clicking a row outside the selection makes it the selection, so the copy menu acts on it.
+    private void ResultsGrid_PreviewMouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        DependencyObject? current = e.OriginalSource as DependencyObject;
+        while (current != null && current is not DataGridRow) current = VisualTreeHelper.GetParent(current);
+        if (current is DataGridRow row && !row.IsSelected) { ResultsGrid.SelectedItems.Clear(); row.IsSelected = true; }
+    }
+    private static string Shorten(string value) => value.Length > 60 ? value[..60] + "…" : value;
+
     private void PopulateWalkTable(IList<Variable> variables)
     {
         var cells = new List<(string Index,string Column,string Value)>();
@@ -510,7 +622,7 @@ public partial class MainWindow : Window
         {
             var oid=variable.Id.ToString(); var node=ResolveNode(oid);
             var column=node?.Name ?? oid; var index=node != null && oid.Length>node.Oid.Length ? oid[(node.Oid.Length+1)..] : "0";
-            cells.Add((index,column,variable.Data.ToString()));
+            cells.Add((index,column,DisplayValue(variable.Data)));
         }
         var table=new DataTable(); table.Columns.Add(_language=="de"?"Index":"Index");
         foreach(var name in cells.Select(x=>x.Column).Distinct()) table.Columns.Add(name);
@@ -710,6 +822,9 @@ public partial class MainWindow : Window
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
         WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
         UpdateCommunityListButton();
+        RecentTargetsButton.ToolTip = de ? "Zuletzt verwendete Ziele (↓)" : "Recent targets (↓)";
+        CopyValueItem.Header = de ? "Wert kopieren" : "Copy value"; CopyOidItem.Header = de ? "OID kopieren" : "Copy OID";
+        CopyOidValueItem.Header = de ? "OID = Wert kopieren" : "Copy OID = value"; CopyRowsItem.Header = de ? "Zeilen kopieren (Excel)" : "Copy rows (Excel)";
         SaveToProfileButton.Content = de ? "💾  Im Profil speichern" : "💾  Save to profile"; SaveToProfileButton.ToolTip = de ? "Diese SNMP-Einstellungen im ausgewählten Profil speichern" : "Save these SNMP settings to the selected profile";
         QueryOidLabel.Text = "OID"; QueryOidBox.ToolTip = de ? "Numerische OID (z. B. 1.3.6.1.4.1.9999.1.1.0)" : "Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)";
         ThemeButton.Content = _dark ? (de ? "☀  Hell" : "☀  Light") : (de ? "☾  Dunkel" : "☾  Dark");
@@ -751,7 +866,7 @@ public partial class MainWindow : Window
 
     private void SaveSettings()
     {
-        try { _settings.Language=_language; _settings.Dark=_dark; Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!); File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_settings,new JsonSerializerOptions{WriteIndented=true})); } catch { }
+        try { _settings.Language=_language; _settings.Dark=_dark; _settings.RecentTargets=[.. _recentTargets]; Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!); File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_settings,new JsonSerializerOptions{WriteIndented=true})); } catch { }
     }
 
     private async Task LoadDefaultMibFolderAsync()

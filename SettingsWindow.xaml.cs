@@ -15,14 +15,14 @@ public partial class SettingsWindow : Window
     public SettingsWindow(UserSettings settings, string language)
     {
         InitializeComponent(); _language = language;
-        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, IncludePrereleases=settings.IncludePrereleases,
+        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, IncludePrereleases=settings.IncludePrereleases, RecentTargets=[.. settings.RecentTargets],
             Profiles=settings.Profiles.Select(Clone).ToList() };
         _profiles = new(ResultSettings.Profiles); ProfilesList.ItemsSource = _profiles; MibFolderBox.Text = settings.MibFolder;
         Localize(); if (_profiles.Count > 0) ProfilesList.SelectedIndex = 0;
     }
 
     private static SnmpProfile Clone(SnmpProfile p) => new() { Name=p.Name, Port=p.Port, Version=p.Version, Community=p.Community, Communities=[.. p.Communities], User=p.User, AuthType=p.AuthType, AuthPassword=p.AuthPassword, PrivacyType=p.PrivacyType, PrivacyPassword=p.PrivacyPassword, Context=p.Context, Timeout=p.Timeout, Retries=p.Retries };
-    private static string Selected(ComboBox box) => (box.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Keine";
+    private static string Selected(ComboBox box) => (box.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "None";
     private static void Select(ComboBox box, string value) { foreach (ComboBoxItem i in box.Items) if (i.Content?.ToString() == value) { box.SelectedItem=i; return; } box.SelectedIndex=0; }
 
     private void ProfilesList_SelectionChanged(object sender, SelectionChangedEventArgs e)

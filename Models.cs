@@ -37,9 +37,9 @@ public sealed class SnmpProfile
     public List<string> Communities { get; set; } = [];
     public List<string> CommunityList() => Communities.Count > 0 ? [.. Communities] : [Community];
     public string User { get; set; } = "";
-    public string AuthType { get; set; } = "Keine";
+    public string AuthType { get; set; } = "None";
     public string AuthPassword { get; set; } = "";
-    public string PrivacyType { get; set; } = "Keine";
+    public string PrivacyType { get; set; } = "None";
     public string PrivacyPassword { get; set; } = "";
     public string Context { get; set; } = "";
     public int Timeout { get; set; } = 3000;
@@ -49,12 +49,13 @@ public sealed class SnmpProfile
 
 public sealed class UserSettings
 {
-    public string Language { get; set; } = "de";
+    public string Language { get; set; } = "en";
     public bool Dark { get; set; }
     public string MibFolder { get; set; } = "";
     public List<SnmpProfile> Profiles { get; set; } = [];
     public string SelectedProfile { get; set; } = "";
     public bool IncludePrereleases { get; set; }
+    public List<string> RecentTargets { get; set; } = [];
 }
 
 public sealed record GitHubRelease(string Tag, string Name, string Notes, bool Prerelease, string PageUrl, string AssetUrl, string AssetName, string Digest);
