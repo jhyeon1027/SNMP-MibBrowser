@@ -23,6 +23,8 @@ public partial class MainWindow : Window
     private bool _syncingConnectionControls;
     private int? _loadedMibFileCount;
     private string _currentOid = "1.3.6.1.2.1.1.1.0";
+    // v1/v2c communities tried in order; the first entry mirrors CommunityBox.
+    private List<string> _communities = ["public"];
     private UserSettings _settings = new();
     private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "settings.json");
 
@@ -30,6 +32,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         FitToWorkArea();
+        _snmp.CommunityAccepted += (host, community, index, total) => Dispatcher.Invoke(() =>
+            Log(Tr($"{host}: Community \"{community}\" akzeptiert (Versuch {index}/{total}).", $"{host}: community \"{community}\" accepted (attempt {index}/{total}).")));
         ResultsGrid.ItemsSource = _results;
         LoadSettings();
         RefreshProfiles();
@@ -478,12 +482,19 @@ public partial class MainWindow : Window
         try
         {
             var answer = await action(_cts.Token); sw.Stop();
+            var firstNew = _results.Count;
             foreach (var v in answer)
             {
                 var oid = v.Id.ToString(); var node = ResolveNode(oid);
                 _results.Add(new(DateTime.Now.ToString("HH:mm:ss"), operation, oid, node?.Name ?? "", v.Data.TypeCode.ToString(), v.Data.ToString(), $"{sw.ElapsedMilliseconds} ms"));
             }
-            if (operation == "WALK") { PopulateWalkTable(answer); DataTabs.SelectedItem = WalkTableTab; }
+            // WALK still fills the WALK table tab, but results are shown in Results,
+            // scrolled to the first row of this walk.
+            if (operation == "WALK")
+            {
+                PopulateWalkTable(answer); DataTabs.SelectedItem = ResultsTab;
+                if (firstNew < _results.Count) ResultsGrid.ScrollIntoView(_results[firstNew]);
+            }
             StatusText.Text = Tr($"{answer.Count} Antwort(en) in {sw.ElapsedMilliseconds} ms", $"{answer.Count} response(s) in {sw.ElapsedMilliseconds} ms");
             Log(Tr($"{operation} {_currentOid}: {answer.Count} Antwort(en), {sw.ElapsedMilliseconds} ms.", $"{operation} {_currentOid}: {answer.Count} response(s), {sw.ElapsedMilliseconds} ms."));
         }
@@ -517,9 +528,10 @@ public partial class MainWindow : Window
     {
         _ = int.TryParse(PortBox.Text, out var port);
         var profile = ProfileBox.SelectedItem as SnmpProfile;
+        var communities = _communities.Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
         return new SnmpOptions(HostBox.Text.Trim(), port > 0 ? port : 161, Selected(VersionBox), CommunityBox.Text,
             UserBox.Text, Selected(AuthBox), AuthPasswordBox.Password, Selected(PrivacyBox), PrivacyPasswordBox.Password, ContextBox.Text,
-            profile?.Timeout ?? 3000, profile?.Retries ?? 1);
+            profile?.Timeout ?? 3000, profile?.Retries ?? 1, communities);
     }
     private static string Selected(ComboBox box) => (box.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
     private void SetBusy(bool busy, string text) { BusyBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed; CancelButton.IsEnabled = busy; StatusText.Text = text; }
@@ -592,7 +604,9 @@ public partial class MainWindow : Window
     {
         PortBox.Text = p.Port.ToString();
         SelectCombo(VersionBox, p.Version);
-        CommunityBox.Text = p.Community;
+        _communities = p.CommunityList();
+        CommunityBox.Text = _communities[0];
+        UpdateCommunityListButton();
         UserBox.Text = p.User;
         SelectCombo(AuthBox, p.AuthType);
         AuthPasswordBox.Password = p.AuthPassword;
@@ -605,12 +619,32 @@ public partial class MainWindow : Window
     {
         box.SelectedItem = box.Items.OfType<ComboBoxItem>().FirstOrDefault(x => string.Equals(x.Content?.ToString(), value, StringComparison.OrdinalIgnoreCase)) ?? box.Items.OfType<ComboBoxItem>().FirstOrDefault();
     }
+    private void CommunityBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        if (_communities.Count == 0) _communities.Add(CommunityBox.Text); else _communities[0] = CommunityBox.Text;
+        UpdateCommunityListButton();
+    }
+    private void CommunityList_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new CommunityListWindow(_communities.Where(x => x.Length > 0), _language) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        _communities = dialog.Result.Count > 0 ? dialog.Result : [""];
+        CommunityBox.Text = _communities[0];
+        UpdateCommunityListButton();
+    }
+    private void UpdateCommunityListButton()
+    {
+        var count = _communities.Count(x => x.Length > 0);
+        CommunityListButton.Content = Tr($"☰  Liste ({count})", $"☰  List ({count})");
+        CommunityListButton.ToolTip = Tr("Community-Liste bearbeiten (wird der Reihe nach versucht)", "Edit the community list (tried in order)");
+    }
     private void VersionBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateVersionFields();
     private void UpdateVersionFields()
     {
         if (!IsInitialized) return;
         var isV3 = Selected(VersionBox) == "v3";
-        CommunityLabel.Visibility = CommunityBox.Visibility = isV3 ? Visibility.Collapsed : Visibility.Visible;
+        CommunityLabel.Visibility = CommunityBox.Visibility = CommunityListButton.Visibility = isV3 ? Visibility.Collapsed : Visibility.Visible;
         V3Panel.Visibility = isV3 ? Visibility.Visible : Visibility.Collapsed;
     }
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
@@ -655,6 +689,7 @@ public partial class MainWindow : Window
         SearchLabel.Text = de ? "MIB-Baum durchsuchen" : "Search MIB tree"; ClearSearchButton.ToolTip = de ? "Suche löschen" : "Clear search"; ContextCopyItem.Header = de ? "OID kopieren" : "Copy OID"; ContextDetailsItem.Header = de ? "Details anzeigen" : "Show details";
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
         WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
+        UpdateCommunityListButton();
         QueryOidLabel.Text = "OID"; QueryOidBox.ToolTip = de ? "Numerische OID (z. B. 1.3.6.1.4.1.9999.1.1.0)" : "Numeric OID (e.g. 1.3.6.1.4.1.9999.1.1.0)";
         ThemeButton.Content = _dark ? (de ? "☀  Hell" : "☀  Light") : (de ? "☾  Dunkel" : "☾  Dark");
         ResultsGrid.Columns[0].Header = de ? "Zeit" : "Time"; ResultsGrid.Columns[1].Header = de ? "Vorgang" : "Operation"; ResultsGrid.Columns[2].Header = "OID"; ResultsGrid.Columns[3].Header = "Name"; ResultsGrid.Columns[4].Header = de ? "Typ" : "Type"; ResultsGrid.Columns[5].Header = de ? "Wert" : "Value"; ResultsGrid.Columns[6].Header = de ? "Dauer" : "Duration";

@@ -7,10 +7,16 @@ namespace SnmpMibBrowser;
 
 public sealed class SnmpService
 {
+    // Community that last worked per host:port:version, so a long community list is probed only once per device.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _workingCommunity = new();
+
+    /// <summary>Raised (on a worker thread) when probing a community list finds the one the device accepts: host, community, position, count.</summary>
+    public event Action<string, string, int, int>? CommunityAccepted;
+
     public const int MaxWalkSteps = 10000;
 
     public Task<IList<Variable>> GetAsync(SnmpOptions o, string oid, bool next, CancellationToken ct) =>
-        Task.Run(() => Send(o, oid, next ? "NEXT" : "GET"), ct);
+        Task.Run(() => Send(o, oid, next ? "NEXT" : "GET", ct), ct);
 
     // maxDepth > 0 limits the walk to that many arcs below oid. For each deeper
     // subtree only its first object is kept, then the rest of it is skipped.
@@ -25,7 +31,7 @@ public sealed class SnmpService
         for (var i = 0; i < MaxWalkSteps; i++)
         {
             ct.ThrowIfCancellationRequested();
-            var answer = Send(o, current, "NEXT");
+            var answer = Send(o, current, "NEXT", ct);
             if (answer.Count == 0 || !answer[0].Id.ToString().StartsWith(oid + ".", StringComparison.Ordinal) || answer[0].Id.ToString() == current) { completed = true; break; }
             var id = answer[0].Id.ToString();
             var arcs = id.Split('.');
@@ -46,11 +52,55 @@ public sealed class SnmpService
         var variable = new Variable(new ObjectIdentifier(Normalize(oid)), MakeData(type, value));
         if (o.Version == "v3") return SendV3(o, [variable], "SET");
         var endpoint = Resolve(o);
-        return Messenger.Set(o.Version == "v1" ? VersionCode.V1 : VersionCode.V2, endpoint, new OctetString(o.Community), [variable], o.Timeout);
+        IList<Variable> SetWith(string community) => Messenger.Set(o.Version == "v1" ? VersionCode.V1 : VersionCode.V2, endpoint, new OctetString(community), [variable], o.Timeout);
+        if (o.Communities is not { Count: > 1 } communities) return SetWith(o.Community);
+        // Write communities often differ from read ones, so SET always walks the list in order and skips
+        // communities that time out or are refused (noAccess / authorizationError).
+        Exception? last = null;
+        for (var i = 0; i < communities.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { var result = SetWith(communities[i]); CommunityAccepted?.Invoke(o.Host, communities[i], i + 1, communities.Count); return result; }
+            catch (Lextm.SharpSnmpLib.Messaging.TimeoutException ex) { last = ex; }
+            catch (ErrorException ex) when (ex.Body != null && ex.Body.Pdu().ErrorStatus.ToInt32() is 6 or 16) { last = ex; }
+        }
+        throw new System.TimeoutException($"SET was not accepted with any of the {communities.Count} communities. Last error: {last?.Message}");
     }, ct);
 
+    private IList<Variable> Send(SnmpOptions o, string oid, string operation, CancellationToken ct)
+    {
+        if (o.Version == "v3" || o.Communities is not { Count: > 1 } communities) return SendWithRetries(o, oid, operation);
+        var key = $"{o.Host}:{o.Port}:{o.Version}";
+        if (_workingCommunity.TryGetValue(key, out var known) && communities.Contains(known))
+        {
+            try { return SendWithRetries(o with { Community = known }, oid, operation); }
+            catch (Lextm.SharpSnmpLib.Messaging.TimeoutException) { _workingCommunity.TryRemove(key, out _); }
+        }
+        // Wrong communities are silently dropped by agents, so each candidate costs one timeout (no retries).
+        // Any SNMP response, including an error status, means the community was accepted.
+        for (var i = 0; i < communities.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var result = SendOnce(o with { Community = communities[i] }, oid, operation);
+                Accept(i);
+                return result;
+            }
+            catch (Lextm.SharpSnmpLib.Messaging.TimeoutException) { }
+            catch (ErrorException) { Accept(i); throw; }
+        }
+        throw new System.TimeoutException($"No response from {o.Host} with any of the {communities.Count} communities.");
+
+        void Accept(int i)
+        {
+            _workingCommunity[key] = communities[i];
+            CommunityAccepted?.Invoke(o.Host, communities[i], i + 1, communities.Count);
+        }
+    }
+
     // GET/GETNEXT are retried on timeout. SET is not, to avoid writing twice.
-    private IList<Variable> Send(SnmpOptions o, string oid, string operation)
+    private IList<Variable> SendWithRetries(SnmpOptions o, string oid, string operation)
     {
         for (var attempt = 0; ; attempt++)
         {

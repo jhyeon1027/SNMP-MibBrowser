@@ -25,7 +25,7 @@ public sealed record ArpRow(string Address, string Mac, string Interface, string
 public sealed record LldpRow(string LocalPort, string ChassisId, string PortId, string PortDescription, string SystemName, string SystemDescription);
 
 public sealed record SnmpOptions(string Host, int Port, string Version, string Community, string User,
-    string AuthType, string AuthPassword, string PrivacyType, string PrivacyPassword, string Context, int Timeout = 3000, int Retries = 1);
+    string AuthType, string AuthPassword, string PrivacyType, string PrivacyPassword, string Context, int Timeout = 3000, int Retries = 1, IReadOnlyList<string>? Communities = null);
 
 public sealed class SnmpProfile
 {
@@ -33,6 +33,9 @@ public sealed class SnmpProfile
     public int Port { get; set; } = 161;
     public string Version { get; set; } = "v2c";
     public string Community { get; set; } = "public";
+    // Ordered v1/v2c communities to try. Older settings files only have Community.
+    public List<string> Communities { get; set; } = [];
+    public List<string> CommunityList() => Communities.Count > 0 ? [.. Communities] : [Community];
     public string User { get; set; } = "";
     public string AuthType { get; set; } = "Keine";
     public string AuthPassword { get; set; } = "";
