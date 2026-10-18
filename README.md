@@ -1,6 +1,6 @@
 # SNMP MibBrowser
 
-Current version: **1.0.3 build13**
+Current version: **1.0.4 build14**
 
 Open-source MIB browser and SNMP diagnostics tool for Windows, built with WPF and .NET 9. The interface is inspired by ACLI Session Manager and supports English and German as well as persistent light and dark themes.
 

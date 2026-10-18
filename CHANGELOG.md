@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 build14
+
+- Support an ordered list of v1/v2c communities (List button next to Community, also in the profile editor). Communities are tried top to bottom; the accepted one is logged and remembered per device for the session.
+- SET tries the community list in order, skipping communities that time out or are refused.
+- WALK now shows the Results tab (scrolled to the new rows) instead of switching to the WALK table tab.
+- Toolbar wraps on narrow or square screens so Options, Updates, and About stay reachable; the window opens within the desktop work area.
+
 ## 1.0.3 build13
 
 - Allow only one query at a time; starting another query while one is running is rejected with a status message.
