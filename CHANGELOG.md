@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.5 build15
+
+- Remember the last 20 targets that answered; open the list with the button next to Target or the Down key.
+- Results: right-click to copy value, OID, "OID = value", or rows for Excel; Ctrl+C copies rows with headers; double-click copies the value.
+- Clipboard copy uses the Win32 clipboard with retries, avoiding false "clipboard busy" errors when a clipboard watcher is running.
+- Show non-text OctetString values (MAC addresses, binary IDs) as hex in Results and the WALK table.
+- Save to profile button in the SNMP configuration panel.
+- English is the default language for new installations; "None" replaces "Keine" in the Auth/Privacy lists.
+- Results columns keep a minimum width and scroll horizontally on narrow screens.
+
 ## 1.0.4 build14
 
 - Support an ordered list of v1/v2c communities (List button next to Community, also in the profile editor). Communities are tried top to bottom; the accepted one is logged and remembered per device for the session.
