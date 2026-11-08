@@ -31,6 +31,8 @@ public partial class MainWindow : Window
     // WALK compare tab: one row per OID, values per round.
     private readonly ObservableCollection<CompareRow> _compareRows = [];
     private readonly Dictionary<string, CompareRow> _compareIndex = [];
+    // Target of the last WALK compare run and resources check, used by "Add to monitor".
+    private string _compareTarget = "", _resourcesTarget = "";
     private UserSettings _settings = new();
     private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "settings.json");
 
@@ -498,7 +500,7 @@ public partial class MainWindow : Window
             foreach (var v in answer)
             {
                 var oid = v.Id.ToString(); var node = ResolveNode(oid);
-                _results.Add(new(DateTime.Now.ToString("HH:mm:ss"), operation, oid, node?.Name ?? "", v.Data.TypeCode.ToString(), DisplayValue(v.Data), $"{sw.ElapsedMilliseconds} ms"));
+                _results.Add(new(DateTime.Now.ToString("HH:mm:ss"), operation, oid, node?.Name ?? "", v.Data.TypeCode.ToString(), DisplayValue(v.Data), $"{sw.ElapsedMilliseconds} ms", host));
             }
             // WALK still fills the WALK table tab, but results are shown in Results,
             // scrolled to the first row of this walk.
@@ -617,7 +619,7 @@ public partial class MainWindow : Window
     {
         DependencyObject? current = e.OriginalSource as DependencyObject;
         while (current != null && current is not DataGridRow) current = VisualTreeHelper.GetParent(current);
-        if (current is DataGridRow row && !row.IsSelected) { ResultsGrid.SelectedItems.Clear(); row.IsSelected = true; }
+        if (current is DataGridRow row && !row.IsSelected && sender is DataGrid grid) { grid.SelectedItems.Clear(); row.IsSelected = true; }
     }
     private static string Shorten(string value) => value.Length > 60 ? value[..60] + "…" : value;
 
@@ -649,6 +651,7 @@ public partial class MainWindow : Window
 
         _compareRows.Clear(); _compareIndex.Clear();
         BuildCompareColumns(rounds);
+        _compareTarget = HostBox.Text.Trim();
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
         SetBusy(true, Tr("WALK-Vergleich läuft…", "WALK compare running…"));
@@ -761,6 +764,7 @@ public partial class MainWindow : Window
         };
         var c = await LoadColumnsAsync("Resources", roots);
         if (c == null) return;
+        _resourcesTarget = HostBox.Text.Trim();
         var rows = new List<ResourceRow>();
         var hr = AddHostResources(rows, c[0], c[1], c[2], c[3], c[4], c[5]);
         var ucd = AddUcd(rows, c[6], c[7], c[8], c[9], c[10]);
@@ -911,6 +915,36 @@ public partial class MainWindow : Window
     }
 
     private MibNode? ResolveNode(string oid) => _nodes.Where(n => oid == n.Oid || oid.StartsWith(n.Oid + ".", StringComparison.Ordinal)).OrderByDescending(n => n.Oid.Length).FirstOrDefault();
+    private MonitorWindow? _monitorWindow;
+    private MonitorWindow ShowMonitor()
+    {
+        if (_monitorWindow is not { IsLoaded: true })
+        {
+            _monitorWindow = new MonitorWindow(_snmp, host => Options() with { Host = host }, () => HostBox.Text.Trim(), _language) { Owner = this };
+            _monitorWindow.Show();
+        }
+        _monitorWindow.Activate();
+        return _monitorWindow;
+    }
+    private void Monitor_Click(object sender, RoutedEventArgs e) => ShowMonitor();
+    private void AddToMonitor(IEnumerable<(string Target, string Oid, string Name)> items)
+    {
+        var list = items.Where(i => i.Oid.Length > 0).ToList();
+        if (list.Count == 0) return;
+        var monitor = ShowMonitor();
+        foreach (var (target, oid, name) in list) monitor.AddItem(target.Length > 0 ? target : HostBox.Text.Trim(), oid, name);
+    }
+    private void ResultsMonitor_Click(object sender, RoutedEventArgs e) =>
+        AddToMonitor(SelectedResults().Select(r => (r.Target, r.Oid, SymbolicOid(r.Oid))));
+    private void CompareMonitor_Click(object sender, RoutedEventArgs e) =>
+        AddToMonitor(SelectedCompareRows().Select(r => (_compareTarget, r.Oid, SymbolicOid(r.Oid))));
+    private void ResourcesMonitor_Click(object sender, RoutedEventArgs e) =>
+        AddToMonitor(SelectedResourceRows().Select(r => (_resourcesTarget, r.Oid, r.Item)));
+    private void ContextMonitor_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedMibNode() is { } n) AddToMonitor([(HostBox.Text.Trim(), QueryOidForNode(n), n.Name)]);
+    }
+
     private MultiTargetWindow? _multiTargetWindow;
     private void MultiTarget_Click(object sender, RoutedEventArgs e)
     {
@@ -1111,6 +1145,8 @@ public partial class MainWindow : Window
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
         WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
         UpdateCommunityListButton();
+        MonitorButton.Content = de ? "📈  Überwachung" : "📈  Monitor"; MonitorButton.ToolTip = de ? "OIDs über die Zeit beobachten" : "Watch OIDs over time";
+        ResultsMonitorItem.Header = CompareMonitorItem.Header = ResourcesMonitorItem.Header = ContextMonitorItem.Header = de ? "Zur Überwachung hinzufügen" : "Add to monitor";
         MultiTargetButton.Content = de ? "▦  Mehrere Ziele" : "▦  Multi-target"; MultiTargetButton.ToolTip = de ? "Viele Ziele gleichzeitig abfragen" : "Query many targets at once";
         ResourcesTab.Header = de ? "Ressourcen" : "Resources"; LoadResourcesButton.Content = de ? "↻  Ressourcen prüfen" : "↻  Check resources";
         ResourcesGrid.Columns[0].Header = de ? "Kategorie" : "Category"; ResourcesGrid.Columns[1].Header = de ? "Element" : "Item"; ResourcesGrid.Columns[2].Header = de ? "Wert" : "Value";

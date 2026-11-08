@@ -16,7 +16,7 @@ public sealed class MibNode
     public override string ToString() => Display;
 }
 
-public sealed record QueryResult(string Timestamp, string Operation, string Oid, string Name, string Type, string Value, string Duration);
+public sealed record QueryResult(string Timestamp, string Operation, string Oid, string Name, string Type, string Value, string Duration, string Target = "");
 
 public sealed record InterfaceRow(string Index, string Name, string Type, string Mtu, string Speed, string Mac, string Admin, string Operational);
 public sealed record IpAddressRow(string Address, string Interface, string Netmask, string Broadcast);
