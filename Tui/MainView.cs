@@ -16,6 +16,8 @@ public sealed partial class MainView : Runnable
     private readonly SettingsStore _store;
     private readonly UserSettings _settings;
     private readonly SnmpService _snmp = new();
+    private readonly MonitorController _monitor;
+    private MultiTargetView? _multiTarget;
     private readonly MibLibrary _mib = new();
     private readonly List<QueryResult> _results = [];
     private CancellationTokenSource? _cts;
@@ -45,6 +47,7 @@ public sealed partial class MainView : Runnable
         _recentTargets = [.. _settings.RecentTargets.Take(MaxRecentTargets)];
         var profile = _settings.Profiles.FirstOrDefault(p => p.Name == _settings.SelectedProfile) ?? _settings.Profiles[0];
         _profileName = profile.Name;
+        _monitor = new MonitorController(_snmp);
         _conn = Copy(profile);
 
         Title = "SNMP MibBrowser";
@@ -81,6 +84,13 @@ public sealed partial class MainView : Runnable
             new MenuItem("_Copy selected rows", "F6", CopySelected),
             new MenuItem("Show as _text", "F7", ShowResultsText),
             new MenuItem("C_lear results", "", ClearResults)
+        ]));
+        menu.Add(new MenuBarItem("_Tools",
+        [
+            new MenuItem("_Multi-target query…", "F9", ShowMultiTarget),
+            new MenuItem("M_onitor…", "F11", ShowMonitor),
+            new MenuItem("_Add selected to monitor", "Ctrl+W", AddSelectedToMonitor),
+            new MenuItem("WALK _compare tab", "Alt+3", () => _tabs.Value = _compareTab)
         ]));
         menu.Add(new MenuBarItem("_Help",
         [
@@ -144,7 +154,8 @@ public sealed partial class MainView : Runnable
         _logTab.Add(_log);
         _tabs = new Tabs { X = Pos.Right(mibFrame), Y = 3, Width = Dim.Fill(), Height = Dim.Fill(2) };
         BuildTableTabs();
-        _tabs.Add(_resultsTab, _walkTab, _devicesTab, _resourcesTab, _detailsTab, _logTab);
+        BuildCompareTab();
+        _tabs.Add(_resultsTab, _walkTab, _compareTab, _devicesTab, _resourcesTab, _detailsTab, _logTab);
         _tabs.Value = _resultsTab;
 
         // ---- status line and key bar
@@ -154,7 +165,9 @@ public sealed partial class MainView : Runnable
         keys.Add(
             Key_(Key.F1, "Help", ShowKeys), Key_(Key.F2, "GET", () => _ = GetAsync()), Key_(Key.F3, "NEXT", () => _ = GetNextAsync()),
             Key_(Key.F4, "WALK", () => _ = WalkAsync()), Key_(Key.F5, "SET", () => _ = SetAsync()), Key_(Key.F6, "Copy", CopySelected),
-            Key_(Key.F7, "Text", ShowResultsText), Key_(Key.F8, "Conn", EditConnection), Key_(Key.T.WithCtrl, "Tree", ToggleMibTree), Key_(Key.F12, "Mouse", ToggleMouse), Key_(Key.Q.WithCtrl, "Quit", RequestQuit));
+            Key_(Key.F7, "Text", ShowResultsText), Key_(Key.F8, "Conn", EditConnection), Key_(Key.F9, "Multi", ShowMultiTarget), Key_(Key.F11, "Monitor", ShowMonitor),
+            Key_(Key.W.WithCtrl, "Watch", AddSelectedToMonitor), Key_(Key.F12, "Mouse", ToggleMouse), Key_(Key.T.WithCtrl, "Tree", ToggleMibTree),
+            Key_(Key.Q.WithCtrl, "Quit", RequestQuit));
 
         Add(menu, hostLabel, _host, recent, versionLabel, _version, communityLabel, _community, _communityExtra, portLabel, _port,
             oidLabel, _oid, depthLabel, _depth, get, next, walk, set, clear, mibFrame, _tabs, _status, _profileLabel, keys);
@@ -607,7 +620,51 @@ public sealed partial class MainView : Runnable
     // ================= misc
 
     /// <summary>Ctrl+Q, menu, or SIGTERM/SIGHUP: ends the program normally so the terminal is restored.</summary>
-    public void RequestQuit() { _quitting = true; _cts?.Cancel(); SaveSettings(); App?.RequestStop(); }
+    public void RequestQuit()
+    {
+        _quitting = true; _cts?.Cancel(); _monitor.Pause();
+        SaveSettings();
+        App?.RequestStop();
+    }
+
+    // ================= multi-target and monitor
+
+    private void ShowMultiTarget()
+    {
+        if (App?.TopRunnableView != this) return;
+        _multiTarget ??= new MultiTargetView(_snmp, () => Options() with { Host = "" }, _settings, SaveSettings, Log);
+        _multiTarget.SelectedTarget = null;
+        App.Run(_multiTarget);
+        if (_multiTarget.SelectedTarget is { } target) { _host.Text = target; SetStatus($"Target set: {target}"); _host.SetFocus(); }
+    }
+
+    private void ShowMonitor()
+    {
+        if (App?.TopRunnableView != this) return;
+        using var view = new MonitorView(_monitor, () => _host.Text.Trim(), host => Options() with { Host = host }, oid => _mib.Symbolic(oid));
+        App.Run(view);
+        if (_monitor.Items.Count > 0) SetStatus($"Monitor: {_monitor.Items.Count} items, {(_monitor.Running ? "running" : "paused")} (F11).");
+    }
+
+    // Ctrl+W: the selected rows of Results, Compare or Resources (or the selected tree node) go to the monitor.
+    private void AddSelectedToMonitor()
+    {
+        if (App?.TopRunnableView != this) return;
+        var items = new List<(string Target, string Oid, string Name)>();
+        if (_tree.HasFocus && _tree.SelectedObject is { } node)
+            items.Add((_host.Text.Trim(), _mib.QueryOidFor(node.Node), node.Node.Name));
+        else if (_tabs.Value == _resultsTab)
+            items.AddRange(_resultsTable.SelectedRows().Where(r => r < _results.Count).Select(r => _results[r]).Select(r => (r.Target, r.Oid, _mib.Symbolic(r.Oid))));
+        else if (_tabs.Value == _compareTab)
+            items.AddRange(_compareTable.SelectedRows().Where(r => r < _compareVisible.Count).Select(r => (_compareTarget, _compareVisible[r].Oid, _mib.Symbolic(_compareVisible[r].Oid))));
+        else if (_tabs.Value == _resourcesTab)
+            items.AddRange(_resourcesTable.SelectedRows().Where(r => r < _resourceRows.Count && _resourceRows[r].Oid.Length > 0).Select(r => (_resourcesTarget, _resourceRows[r].Oid, _resourceRows[r].Item)));
+        if (items.Count == 0) { SetStatus("Select rows in Results, Compare or Resources (or a tree node), then Ctrl+W."); return; }
+        string message = "";
+        foreach (var (target, oid, name) in items.DistinctBy(i => (i.Target, i.Oid)))
+            message = _monitor.Add(target, oid, name, Options() with { Host = target });
+        SetStatus(items.Count == 1 ? message + "  (F11 shows the monitor)" : $"{items.Count} items sent to the monitor: {message}  (F11)");
+    }
 
     private void ShowKeys() => Dialogs.ShowText(App!, "Keys", """
         F2  GET            Enter in OID field = GET, in Host field = sysDescr
@@ -624,11 +681,14 @@ public sealed partial class MainView : Runnable
         Down in Host field                  recent targets
         Tree: Enter = GET (scalar) or WALK (table/branch), arrows to move/expand
         Ctrl+T  show/hide the MIB tree (more room for the results)
-        Alt+1..6  tabs: Results, WALK table, Devices, Resources, MIB details, Log
+        Alt+1..7  tabs: Results, WALK table, Compare, Devices, Resources, MIB details, Log
+        Compare tab: walks an OID 2-10 times and highlights rows whose value changed
+        F9  Multi-target query: the same OIDs from many targets (ranges like 10.1.1.10-20)
+        F11 Monitor: graphs of OIDs over time;  Ctrl+W adds the selected rows / tree node
         Devices tab: buttons, or Query menu (F9) -> Interfaces, IP, Routing, ARP, LLDP
         Resources tab: Alt+C check.  Enter on any table row shows the whole row.
         F6 / F7 act on the table of the visible tab.
-        Tab / Shift+Tab move between fields; F9 or Alt opens the menu.
+        Tab / Shift+Tab move between fields; F10 opens the menu.
 
         F12 Mouse: hand the mouse to the terminal to select and copy text (Termius: drag, Ctrl+Shift+C;
             MobaXterm: drag, right-click > Copy), F12 again to click in the app. F7 does this by itself.

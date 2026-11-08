@@ -181,14 +181,14 @@ public sealed partial class MainView
 
     /// <summary>The table on the visible tab (F6 / F7 act on it).</summary>
     private TableView? CurrentTable() =>
-        _tabs.Value == _resultsTab ? _resultsTable : _tabs.Value == _walkTab ? _walkTable : _tabs.Value == _devicesTab ? _deviceTable :
+        _tabs.Value == _resultsTab ? _resultsTable : _tabs.Value == _walkTab ? _walkTable : _tabs.Value == _compareTab ? _compareTable : _tabs.Value == _devicesTab ? _deviceTable :
         _tabs.Value == _resourcesTab ? _resourcesTable : null;
 
-    // Alt+1..6 switch tabs (only on the main screen, not while a dialog is open).
+    // Alt+1..7 switch tabs (only on the main screen, not while a dialog is open).
     private void OnAppKeyDown(object? sender, Key key)
     {
         if (App?.TopRunnableView != this || !key.IsAlt) return;
-        View[] tabs = [_resultsTab, _walkTab, _devicesTab, _resourcesTab, _detailsTab, _logTab];
+        View[] tabs = [_resultsTab, _walkTab, _compareTab, _devicesTab, _resourcesTab, _detailsTab, _logTab];
         var index = (int)key.NoAlt.NoShift.NoCtrl.KeyCode - (int)Terminal.Gui.Drivers.KeyCode.D1;
         if (index < 0 || index >= tabs.Length) return;
         _tabs.Value = tabs[index];
