@@ -12,7 +12,8 @@ namespace SnmpMibBrowser;
 /// </summary>
 public partial class App : Application
 {
-    private static readonly string ErrorLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "error.log");
+    private static readonly SettingsStore Store = new();
+    private static string ErrorLogPath => Store.ErrorLogPath;
 
     static App()
     {
@@ -39,15 +40,6 @@ public partial class App : Application
         MessageBox.Show($"{e.Exception.Message}\n\nDetails: {ErrorLogPath}", "SNMP MibBrowser - Unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    private static void WriteErrorLog(string source, Exception? ex)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(ErrorLogPath)!);
-            var version = typeof(App).Assembly.GetName().Version;
-            File.AppendAllText(ErrorLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source} error (v{version}){Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
-        }
-        catch { }
-    }
+    private static void WriteErrorLog(string source, Exception? ex) => Store.WriteErrorLog(source, ex, typeof(App).Assembly.GetName().Version);
 }
 

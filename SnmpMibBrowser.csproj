@@ -23,8 +23,12 @@
     <DebugType>none</DebugType>
   </PropertyGroup>
 
+  <!-- Core/ and Tui/ are separate projects; keep their sources out of this one. -->
   <ItemGroup>
-    <PackageReference Include="Lextm.SharpSnmpLib" Version="12.5.7" />
+    <Compile Remove="Core/**;Tui/**" />
+    <None Remove="Core/**;Tui/**" />
+    <Page Remove="Core/**;Tui/**" />
+    <ProjectReference Include="Core/SnmpMibBrowser.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,26 +1,18 @@
 using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media;
-using Lextm.SharpSnmpLib.Messaging;
 
 namespace SnmpMibBrowser;
 
 // GETs the same OIDs from many targets in parallel, using the SNMP settings of the main window.
 public partial class MultiTargetWindow : Window
 {
-    private const int MaxParallel = 10;
-    private const int MaxTargets = 2000;
-    private static readonly (string Name, string Oid, bool Checked)[] Presets =
-    [
-        ("sysName", "1.3.6.1.2.1.1.5.0", true), ("sysDescr", "1.3.6.1.2.1.1.1.0", true), ("sysUpTime", "1.3.6.1.2.1.1.3.0", false),
-        ("sysObjectID", "1.3.6.1.2.1.1.2.0", false), ("sysLocation", "1.3.6.1.2.1.1.6.0", false), ("sysContact", "1.3.6.1.2.1.1.4.0", false)
-    ];
-    private static readonly Regex RangeRx = new(@"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$", RegexOptions.Compiled);
+    private const int MaxParallel = MultiTargetQuery.MaxParallel;
+    private const int MaxTargets = MultiTargetQuery.MaxTargets;
+    private static readonly (string Name, string Oid, bool Checked)[] Presets = MultiTargetQuery.Presets;
 
     private readonly SnmpService _snmp;
     private readonly Func<string, SnmpOptions> _optionsFor;
@@ -105,20 +97,7 @@ public partial class MultiTargetWindow : Window
     private void UpdateCommunityButton() =>
         CommunityListButton.Content = Tr($"☰  Liste ({_communities.Count(x => x.Length > 0)})", $"☰  List ({_communities.Count(x => x.Length > 0)})");
 
-    public static List<string> ParseTargets(string text)
-    {
-        var targets = new List<string>();
-        foreach (var raw in text.Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#')) continue;
-            var m = RangeRx.Match(line);
-            if (m.Success && int.TryParse(m.Groups[2].Value, out var from) && int.TryParse(m.Groups[3].Value, out var to) && from <= to && to <= 255)
-                for (var n = from; n <= to; n++) targets.Add(m.Groups[1].Value + n);
-            else targets.Add(line);
-        }
-        return targets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
+    private static List<string> ParseTargets(string text) => MultiTargetQuery.ParseTargets(text);
 
     private void TargetsBox_TextChanged(object sender, TextChangedEventArgs e) =>
         TargetCountText.Text = Tr($"{ParseTargets(TargetsBox.Text).Count} Ziele", $"{ParseTargets(TargetsBox.Text).Count} targets");
@@ -198,63 +177,8 @@ public partial class MultiTargetWindow : Window
         }
     }
 
-    private async Task QueryAsync(MultiTargetRow row, List<(string Header, string Oid)> oids, CancellationToken ct)
-    {
-        var options = OptionsFor(row.Target);
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            // One GET per OID: a single unknown OID then only affects its own column (SNMPv1 fails the whole request otherwise).
-            // The first GET finds the community; later ones reuse it from the service cache.
-            for (var i = 0; i < oids.Count; i++)
-            {
-                try
-                {
-                    var answer = await _snmp.GetAsync(options, oids[i].Oid, false, ct);
-                    row.Values[i] = answer.Count > 0 ? MainWindow.DisplayValue(answer[0].Data) : "";
-                }
-                catch (ErrorException ex) { row.Values[i] = "error " + (ex.Body?.Pdu().ErrorStatus.ToInt32() is 2 ? "noSuchName" : ex.Body?.Pdu().ErrorStatus.ToString()); }
-            }
-            row.SetResult("OK", false, _snmp.CommunityUsed(options) ?? "", $"{sw.ElapsedMilliseconds} ms");
-        }
-        catch (OperationCanceledException) { row.SetResult(Tr("Abgebrochen", "Cancelled"), true, "", ""); throw; }
-        catch (Exception ex) when (ex is Lextm.SharpSnmpLib.Messaging.TimeoutException or System.TimeoutException) { await SetNoResponseAsync(row, ct); }
-        catch (SnmpV3ReportException ex) { row.SetResult("v3: " + ex.Message.Replace("SNMPv3: ", "").TrimEnd('.'), true, "", "", ex.Message); }
-        catch (System.Net.Sockets.SocketException ex)
-        {
-            var (status, detail) = ex.SocketErrorCode switch
-            {
-                // ICMP "port unreachable": the host is up but nothing listens on the SNMP port.
-                System.Net.Sockets.SocketError.ConnectionReset => (Tr("Port geschlossen", "Port closed"), Tr("Host erreichbar, aber kein SNMP-Dienst auf dem Port.", "The host is up but no SNMP service listens on the port.")),
-                System.Net.Sockets.SocketError.HostNotFound or System.Net.Sockets.SocketError.NoData or System.Net.Sockets.SocketError.TryAgain => (Tr("Name nicht auflösbar", "Name not resolved"), ex.Message),
-                System.Net.Sockets.SocketError.NetworkUnreachable or System.Net.Sockets.SocketError.HostUnreachable => (Tr("Netz nicht erreichbar", "Network unreachable"), ex.Message),
-                _ => (Tr("Netzwerkfehler", "Network error"), ex.Message)
-            };
-            row.SetResult(status, true, "", "", detail);
-        }
-        catch (Exception ex) { row.SetResult(Tr("Fehler", "Error"), true, "", "", ex.Message); }
-    }
-
-    // No SNMP answer: a ping tells "SNMP not answering" (wrong community/credentials, SNMP off, ACL) from "host not reachable".
-    private async Task SetNoResponseAsync(MultiTargetRow row, CancellationToken ct)
-    {
-        var alive = false;
-        try
-        {
-            using var ping = new System.Net.NetworkInformation.Ping();
-            alive = (await ping.SendPingAsync(row.Target, TimeSpan.FromMilliseconds(1000), cancellationToken: ct)).Status == System.Net.NetworkInformation.IPStatus.Success;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception) { }
-        if (alive)
-            row.SetResult(Tr("Kein SNMP (Host aktiv)", "No SNMP (host up)"), true, "", "",
-                Tr("Host antwortet auf Ping, aber nicht auf SNMP: falsche Community/v3-Zugangsdaten, SNMP deaktiviert oder ACL blockiert diesen PC.",
-                   "The host answers ping but not SNMP: wrong community / v3 credentials, SNMP disabled, or an ACL blocks this PC."));
-        else
-            row.SetResult(Tr("Keine Antwort (Host aus?)", "No response (host down?)"), true, "", "",
-                Tr("Weder SNMP- noch Ping-Antwort: Host aus, falsche IP oder ICMP unterwegs blockiert.",
-                   "No reply to SNMP or ping: host down, wrong IP, or ICMP blocked on the way."));
-    }
+    private Task QueryAsync(MultiTargetRow row, List<(string Header, string Oid)> oids, CancellationToken ct) =>
+        MultiTargetQuery.QueryAsync(_snmp, OptionsFor(row.Target), row, oids.Select(o => o.Oid).ToList(), new Lang(_de), ct);
 
     private void BuildColumns(List<(string Header, string Oid)> oids)
     {

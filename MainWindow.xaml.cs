@@ -13,15 +13,14 @@ namespace SnmpMibBrowser;
 
 public partial class MainWindow : Window
 {
-    private readonly MibParser _parser = new();
+    private readonly MibLibrary _mib = new();
+    private List<MibNode> _nodes => _mib.Nodes;
     private readonly SnmpService _snmp = new();
     private readonly ObservableCollection<QueryResult> _results = [];
-    private List<MibNode> _nodes = [];
     private CancellationTokenSource? _cts;
     private string _language = "en";
     private bool _dark;
     private bool _syncingConnectionControls;
-    private int? _loadedMibFileCount;
     private string _currentOid = "1.3.6.1.2.1.1.1.0";
     // v1/v2c communities tried in order; the first entry mirrors CommunityBox.
     private List<string> _communities = ["public"];
@@ -34,7 +33,7 @@ public partial class MainWindow : Window
     // Target of the last WALK compare run and resources check, used by "Add to monitor".
     private string _compareTarget = "", _resourcesTarget = "";
     private UserSettings _settings = new();
-    private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "settings.json");
+    private readonly SettingsStore _store = new();
 
     public MainWindow()
     {
@@ -49,7 +48,6 @@ public partial class MainWindow : Window
         LoadSettings();
         _recentTargets = [.. _settings.RecentTargets.Take(MaxRecentTargets)];
         RefreshProfiles();
-        _nodes = StandardMibCatalog.Load().ToList();
         RebuildTree(_nodes);
         ApplyTheme();
         ApplyLanguage();
@@ -78,9 +76,7 @@ public partial class MainWindow : Window
         var dialog = new OpenFolderDialog { Title = Tr("MIB-Ordner auswählen", "Select MIB folder"), Multiselect = false };
         if (dialog.ShowDialog() == true)
         {
-            var files = Directory.EnumerateFiles(dialog.FolderName, "*", SearchOption.AllDirectories)
-                .Where(x => new[] { ".mib", ".my", ".txt", "" }.Contains(Path.GetExtension(x).ToLowerInvariant()));
-            await LoadMibsAsync(files);
+            await LoadMibsAsync(MibLibrary.MibFilesIn(dialog.FolderName));
         }
     }
 
@@ -89,59 +85,24 @@ public partial class MainWindow : Window
         var list = files.ToList(); SetBusy(true, Tr($"Lade {list.Count} MIB-Dateien…", $"Loading {list.Count} MIB files…"));
         try
         {
-            var parsed = await Task.Run(() => _parser.ParseFiles(list));
-            var existingOids = _nodes.Select(x => x.Oid).ToHashSet(StringComparer.Ordinal);
-            var accepted = parsed.Where(x => existingOids.Contains(x.Oid) || IsImportableOid(x.Oid)).ToList();
-            var protectedCount = parsed.Count - accepted.Count;
-            // Existing/built-in definitions win. This prevents imported standard MIBs
-            // from replacing public catalog entries or appearing twice.
-            _nodes = _nodes.Concat(accepted).Where(x => !string.IsNullOrWhiteSpace(x.Oid)).GroupBy(x => x.Oid).Select(x => x.First()).OrderBy(x => x.Oid).ToList();
+            var (accepted, protectedCount) = await Task.Run(() => _mib.Load(list));
             RebuildTree(_nodes);
-            _loadedMibFileCount = list.Count;
             UpdateMibStatus();
-            Log(Tr($"{accepted.Count:N0} MIB-Objekte geladen; {protectedCount:N0} öffentliche Definitionen zum Schutz des eingebauten Katalogs übersprungen.", $"{accepted.Count:N0} MIB objects loaded; {protectedCount:N0} public definitions skipped to protect the built-in catalog."));
+            Log(Tr($"{accepted:N0} MIB-Objekte geladen; {protectedCount:N0} öffentliche Definitionen zum Schutz des eingebauten Katalogs übersprungen.", $"{accepted:N0} MIB objects loaded; {protectedCount:N0} public definitions skipped to protect the built-in catalog."));
         }
         catch (Exception ex) { ShowError(Tr("MIB-Dateien konnten nicht geladen werden", "MIB files could not be loaded"), ex); }
         finally { SetBusy(false, Tr("Bereit", "Ready")); }
     }
 
-    private static bool IsImportableOid(string oid) =>
-        oid == "1.3.6.1.4.1" || oid.StartsWith("1.3.6.1.4.1.", StringComparison.Ordinal) ||
-        oid == "1.3.6.1.3" || oid.StartsWith("1.3.6.1.3.", StringComparison.Ordinal);
-
     private void RebuildTree(IEnumerable<MibNode> nodes, string? focusOid = null)
     {
         MibTree.Items.Clear();
-        var expandedByDefault = new HashSet<string> { "1", "1.3", "1.3.6", "1.3.6.1", "1.3.6.1.2", "1.3.6.1.2.1", "1.3.6.1.2.1.1" };
-        var nodeList = nodes.ToList();
-        // Resolve labels against the complete MIB catalog, not only the filtered
-        // result set. Otherwise parents of a search result fall back to numeric arcs.
-        var exact = _nodes.Concat(nodeList)
-            .Where(x => !string.IsNullOrWhiteSpace(x.Oid))
-            .GroupBy(x => x.Oid)
-            .ToDictionary(x => x.Key, x => x.First());
-        var allOids = new HashSet<string>();
-        foreach (var node in nodeList)
-        {
-            var parts = node.Oid.Split('.');
-            for (var i = 1; i <= parts.Length; i++) allOids.Add(string.Join('.', parts.Take(i)));
-        }
-        var labels = OidRootLabels();
         var items = new Dictionary<string, TreeViewItem>();
-        foreach (var oid in allOids
-            .OrderBy(x => x.Count(c => c == '.'))
-            .ThenBy(ParentOid, StringComparer.Ordinal)
-            .ThenBy(x => labels.TryGetValue(x, out var canonical) ? canonical : exact.TryGetValue(x, out var node) ? node.Name : x.Split('.').Last(), StringComparer.CurrentCultureIgnoreCase)
-            .ThenBy(OidSortKey))
+        foreach (var (oid, name, model) in _mib.BuildTree(nodes))
         {
-            exact.TryGetValue(oid, out var node);
-            // Canonical public-tree labels are immutable. Imported aliases may
-            // enrich details, but cannot rename the standard OID hierarchy.
-            var name = labels.TryGetValue(oid, out var canonical) ? canonical : node?.Name ?? oid.Split('.').Last();
-            var model = node ?? new MibNode { Name = name, Oid = oid, Module = "OID tree", Description = "Struktureller OID-Knoten", DescriptionEnglish = "Structural OID node" };
             var expandsToFocus = !string.IsNullOrWhiteSpace(focusOid) &&
                 (focusOid == oid || focusOid.StartsWith(oid + ".", StringComparison.Ordinal));
-            var item = new TreeViewItem { Header = name, Tag = model, ToolTip = oid, IsExpanded = expandsToFocus || expandedByDefault.Contains(oid) };
+            var item = new TreeViewItem { Header = name, Tag = model, ToolTip = oid, IsExpanded = expandsToFocus || MibLibrary.ExpandedByDefault.Contains(oid) };
             items[oid] = item;
             var cut = oid.LastIndexOf('.');
             if (cut > 0 && items.TryGetValue(oid[..cut], out var parent)) parent.Items.Add(item); else MibTree.Items.Add(item);
@@ -155,59 +116,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private static Dictionary<string, string> OidRootLabels() => new()
-    {
-        ["1"]="iso", ["1.0"]="standard", ["1.3"]="org", ["1.3.6"]="dod", ["1.3.6.1"]="internet",
-        ["1.3.6.1.1"]="directory", ["1.3.6.1.2"]="mgmt", ["1.3.6.1.2.1"]="mib-2", ["1.3.6.1.2.1.10"]="transmission",
-        ["1.3.6.1.2.1.2"]="interfaces", ["1.3.6.1.2.1.4"]="ip", ["1.3.6.1.2.1.6"]="tcp", ["1.3.6.1.2.1.7"]="udp",
-        ["1.3.6.1.2.1.17"]="dot1dBridge", ["1.3.6.1.2.1.25"]="host", ["1.3.6.1.2.1.47"]="entityMIB",
-        ["1.3.6.1.3"]="experimental", ["1.3.6.1.4"]="private", ["1.3.6.1.4.1"]="enterprises",
-        ["1.0.8802"]="ieee", ["1.0.8802.1"]="standards", ["1.0.8802.1.1"]="ieee802dot1", ["1.0.8802.1.1.2"]="lldpMIB"
-    };
-
-    // Arcs are unsigned 32-bit (TimeTicks indexes such as lldpRemTimeMark exceed int.MaxValue on long-running devices).
-    private static string OidSortKey(string oid) => string.Join('.', oid.Split('.').Select(x => ulong.TryParse(x, out var n) ? n.ToString("D10") : x));
-    private static string ParentOid(string oid)
-    {
-        var cut = oid.LastIndexOf('.');
-        return cut > 0 ? oid[..cut] : string.Empty;
-    }
+    private static string OidSortKey(string oid) => OidUtil.SortKey(oid);
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_nodes.Count == 0) return;
-        var q = SearchBox.Text.Trim();
-        if (string.IsNullOrEmpty(q))
-        {
-            RebuildTree(_nodes);
-            return;
-        }
-
-        var normalizedOid = q.TrimStart('.');
-        if (IsNumericOid(normalizedOid))
-        {
-            // An entered OID may include a scalar or table index that has no MIB
-            // node of its own. Select the most specific known object in that case.
-            var match = _nodes
-                .Where(x => normalizedOid == x.Oid || normalizedOid.StartsWith(x.Oid + ".", StringComparison.Ordinal))
-                .OrderByDescending(x => x.Oid.Split('.').Length)
-                .FirstOrDefault();
-            if (match != null)
-            {
-                RebuildTree([match], match.Oid);
-                return;
-            }
-        }
-
-        RebuildTree(_nodes.Where(x =>
-            x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-            x.Oid.Contains(normalizedOid, StringComparison.Ordinal) ||
-            x.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-            x.DescriptionEnglish.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        var (matches, focus) = _mib.Search(SearchBox.Text);
+        RebuildTree(matches, focus);
     }
 
-    private static bool IsNumericOid(string value) =>
-        !string.IsNullOrWhiteSpace(value) && value.Split('.').All(part => part.Length > 0 && part.All(char.IsDigit));
     private void ClearSearch_Click(object sender, RoutedEventArgs e) { SearchBox.Clear(); SearchBox.Focus(); }
 
     private void MibTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -216,10 +133,7 @@ public partial class MainWindow : Window
         _currentOid = QueryOidForNode(n);
         SetOidBox.Text = QueryOidForNode(n);
         QueryOidBox.Text = _currentOid;
-        var description = _language == "en" && !string.IsNullOrWhiteSpace(n.DescriptionEnglish) ? n.DescriptionEnglish : n.Description;
-        DetailsBox.Text = _language == "de"
-            ? $"Name:         {n.Name}\r\nOID:          {n.Oid}\r\nModul:        {n.Module}\r\nSyntax:       {n.Syntax}\r\nZugriff:      {n.Access}\r\n\r\nBeschreibung:\r\n{description}"
-            : $"Name:         {n.Name}\r\nOID:          {n.Oid}\r\nModule:       {n.Module}\r\nSyntax:       {n.Syntax}\r\nAccess:       {n.Access}\r\n\r\nDescription:\r\n{description}";
+        DetailsBox.Text = _mib.Details(n, L, "\r\n");
     }
 
     private async void Get_Click(object sender, RoutedEventArgs e) => await ExecuteGetAsync();
@@ -298,7 +212,7 @@ public partial class MainWindow : Window
     {
         oid = QueryOidBox.Text.Trim().TrimStart('.');
         if (RejectWhileBusy()) return false;
-        if (!IsNumericOid(oid) || !oid.Split('.').All(part => uint.TryParse(part, out _)))
+        if (!OidUtil.IsValid(oid))
         {
             var message = Tr($"Ungültige OID: \"{QueryOidBox.Text.Trim()}\". Erwartet wird eine numerische OID wie 1.3.6.1.2.1.1.1.0.", $"Invalid OID: \"{QueryOidBox.Text.Trim()}\". Expected a numeric OID such as 1.3.6.1.2.1.1.1.0.");
             StatusText.Text = message;
@@ -347,138 +261,63 @@ public partial class MainWindow : Window
     private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) CopyToClipboard(n.Oid, 1); }
     private void ContextDetails_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode()!=null) DetailsPanel.IsExpanded=true; }
 
-    private string QueryOidForNode(MibNode node) => IsScalar(node) ? node.Oid + ".0" : node.Oid;
-
-    private string NormalizeGetOid(string oid)
-    {
-        oid = oid.Trim().TrimStart('.');
-        if (oid.EndsWith(".0", StringComparison.Ordinal)) return oid;
-        var exact = _nodes.FirstOrDefault(n => n.Oid == oid);
-        return exact != null && IsScalar(exact) ? oid + ".0" : oid;
-    }
-
-    private bool IsScalar(MibNode node)
-    {
-        if (!node.Access.StartsWith("read", StringComparison.OrdinalIgnoreCase)) return false;
-        return !_nodes.Any(parent => node.Oid.StartsWith(parent.Oid + ".", StringComparison.Ordinal) && parent.Syntax.Contains("SEQUENCE", StringComparison.OrdinalIgnoreCase));
-    }
+    private string QueryOidForNode(MibNode node) => _mib.QueryOidFor(node);
+    private string NormalizeGetOid(string oid) => _mib.NormalizeGetOid(oid);
+    private bool IsScalar(MibNode node) => _mib.IsScalar(node);
 
     private async void LoadInterfaces_Click(object sender, RoutedEventArgs e)
     {
-        var c = await LoadColumnsAsync("Interfaces", new[] { "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.2.2.1.3", "1.3.6.1.2.1.2.2.1.4", "1.3.6.1.2.1.2.2.1.5", "1.3.6.1.2.1.2.2.1.6", "1.3.6.1.2.1.2.2.1.7", "1.3.6.1.2.1.2.2.1.8", "1.3.6.1.2.1.31.1.1.1.1", "1.3.6.1.2.1.31.1.1.1.15", "1.3.6.1.2.1.31.1.1.1.17" });
+        var c = await LoadColumnsAsync("Interfaces", DeviceTables.InterfaceRoots);
         if (c == null) return;
-        var hasConnectorData = c[9].Count > 0;
-        var rows = Keys(c).Where(k => hasConnectorData ? Val(c,9,k) == "1" : IsPhysicalInterfaceType(Val(c,1,k))).Select(k => new InterfaceRow(k,
-            string.IsNullOrWhiteSpace(Val(c,7,k)) ? Val(c,0,k) : Val(c,7,k), InterfaceType(Val(c,1,k)), Val(c,2,k),
-            FormatInterfaceSpeed(Val(c,3,k), Val(c,8,k)), Mac(c[4].GetValueOrDefault(k)), Status(Val(c,5,k)), Status(Val(c,6,k)))).ToList();
+        var rows = DeviceTables.Interfaces(c);
         InterfacesGrid.ItemsSource = rows;
         StatusText.Text = _language == "de" ? $"Interfaces: {rows.Count} physische Ports" : $"Interfaces: {rows.Count} physical ports";
     }
 
     private async void LoadIp_Click(object sender, RoutedEventArgs e)
     {
-        var c = await LoadColumnsAsync("IP", new[] { "1.3.6.1.2.1.4.20.1.1", "1.3.6.1.2.1.4.20.1.2", "1.3.6.1.2.1.4.20.1.3", "1.3.6.1.2.1.4.20.1.4" });
-        if (c == null) return; IpGrid.ItemsSource = Keys(c).Select(k => new IpAddressRow(Val(c,0,k), Val(c,1,k), Val(c,2,k), BroadcastAddress(Val(c,0,k), Val(c,2,k)))).ToList();
+        var c = await LoadColumnsAsync("IP", DeviceTables.IpRoots);
+        if (c == null) return; IpGrid.ItemsSource = DeviceTables.IpAddresses(c);
     }
 
     private async void LoadRoutes_Click(object sender, RoutedEventArgs e)
     {
-        var c = await LoadColumnsAsync("Routing", new[] { "1.3.6.1.2.1.4.21.1.1", "1.3.6.1.2.1.4.21.1.11", "1.3.6.1.2.1.4.21.1.7", "1.3.6.1.2.1.4.21.1.2", "1.3.6.1.2.1.4.21.1.3", "1.3.6.1.2.1.4.21.1.8", "1.3.6.1.2.1.4.21.1.9" });
-        if (c == null) return; RoutesGrid.ItemsSource = Keys(c).Select(k => new RouteRow(Val(c,0,k), Val(c,1,k), Val(c,2,k), Val(c,3,k), Val(c,4,k), RouteType(Val(c,5,k)), RouteProtocol(Val(c,6,k)))).ToList();
+        var c = await LoadColumnsAsync("Routing", DeviceTables.RouteRoots);
+        if (c == null) return; RoutesGrid.ItemsSource = DeviceTables.Routes(c);
     }
 
     private async void LoadArp_Click(object sender, RoutedEventArgs e)
     {
-        var c = await LoadColumnsAsync("ARP", new[] { "1.3.6.1.2.1.4.22.1.3", "1.3.6.1.2.1.4.22.1.2", "1.3.6.1.2.1.4.22.1.1", "1.3.6.1.2.1.4.22.1.4" });
-        if (c == null) return; ArpGrid.ItemsSource = Keys(c).Select(k => new ArpRow(Val(c,0,k), Mac(c[1].GetValueOrDefault(k)), Val(c,2,k), ArpType(Val(c,3,k)))).ToList();
+        var c = await LoadColumnsAsync("ARP", DeviceTables.ArpRoots);
+        if (c == null) return; ArpGrid.ItemsSource = DeviceTables.Arp(c);
     }
 
     private async void LoadLldp_Click(object sender, RoutedEventArgs e)
     {
-        var c = await LoadColumnsAsync("LLDP", new[] { "1.0.8802.1.1.2.1.4.1.1.4", "1.0.8802.1.1.2.1.4.1.1.5", "1.0.8802.1.1.2.1.4.1.1.6", "1.0.8802.1.1.2.1.4.1.1.7", "1.0.8802.1.1.2.1.4.1.1.8", "1.0.8802.1.1.2.1.4.1.1.9", "1.0.8802.1.1.2.1.4.1.1.10" });
+        var options = Options();   // the device LoadColumnsAsync queries, read before the await
+        var c = await LoadColumnsAsync("LLDP", DeviceTables.LldpRoots);
         if (c == null) return;
-        const string localPortRoot = "1.0.8802.1.1.2.1.3.7.1.3";
         var localPorts = new Dictionary<string, string>();
-        try
-        {
-            var localPortValues = await _snmp.WalkAsync(Options(), localPortRoot, CancellationToken.None);
-            localPorts = localPortValues.ToDictionary(v => v.Id.ToString()[(localPortRoot.Length + 1)..], v => v.Data.ToString());
-        }
+        try { localPorts = await DeviceTables.LldpLocalPortsAsync(_snmp, options, CancellationToken.None); }
         catch (Exception ex) { Log(Tr($"LLDP-Zuordnung lokaler Ports nicht verfügbar: {ex.Message}", $"LLDP local port mapping unavailable: {ex.Message}")); }
-        LldpGrid.ItemsSource = Keys(c).Select(k => new LldpRow(LocalPortName(k, localPorts), LldpChassisId(c[1].GetValueOrDefault(k), Val(c,0,k)), LldpPortId(c[3].GetValueOrDefault(k), Val(c,2,k)), Val(c,4,k), Val(c,5,k), Val(c,6,k))).ToList();
+        LldpGrid.ItemsSource = DeviceTables.Lldp(c, localPorts);
     }
 
-    private async Task<List<Dictionary<string,ISnmpData>>?> LoadColumnsAsync(string feature, IReadOnlyList<string> roots)
+    private async Task<TableColumns?> LoadColumnsAsync(string feature, IReadOnlyList<string> roots)
     {
         if (RejectWhileBusy()) return null;
         _cts = new CancellationTokenSource(); SetBusy(true, $"{feature}…");
         try
         {
-            var columns = new List<Dictionary<string,ISnmpData>>();
             var options = Options();   // one device for all columns, even if the target is edited meanwhile
-            foreach (var root in roots)
-            {
-                var values = await _snmp.WalkAsync(options, root, _cts.Token, limitReached: () => Dispatcher.Invoke(() => LogWalkLimit(root)));
-                columns.Add(values.ToDictionary(v => v.Id.ToString()[(root.Length + 1)..], v => v.Data));
-            }
+            var columns = await TableColumns.LoadAsync(_snmp, options, roots, _cts.Token, root => Dispatcher.Invoke(() => LogWalkLimit(root)));
             RememberTarget(options.Host);
-            StatusText.Text = _language == "de" ? $"{feature}: {Keys(columns).Count()} Einträge" : $"{feature}: {Keys(columns).Count()} entries";
+            StatusText.Text = _language == "de" ? $"{feature}: {columns.Keys().Count()} Einträge" : $"{feature}: {columns.Keys().Count()} entries";
             Log(Tr($"{feature}: Tabelle geladen.", $"{feature}: table loaded.")); return columns;
         }
         catch (OperationCanceledException) { StatusText.Text = _language == "de" ? "Abgebrochen" : "Cancelled"; return null; }
         catch (Exception ex) { ShowError(Tr($"{feature} fehlgeschlagen", $"{feature} failed"), ex); return null; }
         finally { _cts?.Dispose(); _cts = null; SetBusy(false, StatusText.Text); }
-    }
-
-    private static IEnumerable<string> Keys(List<Dictionary<string,ISnmpData>> c) => c.SelectMany(x => x.Keys).Distinct().OrderBy(OidSortKey);
-    private static string Val(List<Dictionary<string,ISnmpData>> c, int column, string key) => c[column].TryGetValue(key, out var value) ? value.ToString() : "";
-    private static string Status(string value) => value switch { "1" => "up", "2" => "down", "3" => "testing", _ => value };
-    private static string FormatSpeed(string value) => ulong.TryParse(value, out var n) ? n >= 1_000_000_000 ? $"{n/1_000_000_000d:0.##} Gbit/s" : n >= 1_000_000 ? $"{n/1_000_000d:0.##} Mbit/s" : n >= 1000 ? $"{n/1000d:0.##} kbit/s" : $"{n} bit/s" : value;
-    private static string FormatInterfaceSpeed(string ifSpeed, string highSpeed) =>
-        ulong.TryParse(highSpeed, out var mbps) && mbps > 0 ? mbps >= 1000 ? $"{mbps / 1000d:0.##} Gbit/s" : $"{mbps} Mbit/s" : FormatSpeed(ifSpeed);
-    private static string Mac(ISnmpData? value)
-    {
-        if (value is not OctetString octets) return value?.ToString() ?? "";
-        var bytes = octets.GetRaw();
-        return bytes.Length == 0 ? "" : string.Join(":", bytes.Select(x => x.ToString("X2")));
-    }
-    private static string InterfaceType(string value) => value switch
-    {
-        "6" => "ethernetCsmacd", "24" => "softwareLoopback", "53" => "propVirtual", "62" => "fastEther",
-        "117" => "gigabitEthernet", "135" => "l2vlan", "161" => "ieee8023adLag", _ => value
-    };
-    private static bool IsPhysicalInterfaceType(string value) => value is "6" or "62" or "69" or "117";
-    private static string BroadcastAddress(string address, string mask)
-    {
-        if (!System.Net.IPAddress.TryParse(address, out var ip) || !System.Net.IPAddress.TryParse(mask, out var netmask)) return "";
-        var a = ip.GetAddressBytes(); var m = netmask.GetAddressBytes();
-        if (a.Length != 4 || m.Length != 4) return "";
-        return new System.Net.IPAddress(a.Zip(m, (x, y) => (byte)(x | ~y)).ToArray()).ToString();
-    }
-    private static string RouteType(string value) => value switch { "1" => "other", "2" => "invalid", "3" => "direct", "4" => "indirect", _ => value };
-    private static string RouteProtocol(string value) => value switch { "1" => "other", "2" => "local", "3" => "netmgmt", "4" => "icmp", "8" => "rip", "13" => "ospf", "14" => "bgp", _ => value };
-    private static string ArpType(string value) => value switch { "1" => "other", "2" => "invalid", "3" => "dynamic", "4" => "static", _ => value };
-    private static string LldpChassisId(ISnmpData? value, string subtype) => subtype switch { "4" => Mac(value), "5" => NetworkAddress(value), _ => TextOrHex(value) };
-    private static string LldpPortId(ISnmpData? value, string subtype) => subtype switch { "3" => Mac(value), "4" => NetworkAddress(value), _ => TextOrHex(value) };
-    private static string LocalPortName(string remoteIndex, IReadOnlyDictionary<string, string> localPorts)
-    {
-        var parts = remoteIndex.Split('.');
-        var localPortNumber = parts.Length >= 2 ? parts[^2] : remoteIndex;
-        return localPorts.GetValueOrDefault(localPortNumber, localPortNumber);
-    }
-    private static string NetworkAddress(ISnmpData? value)
-    {
-        if (value is not OctetString octets) return value?.ToString() ?? "";
-        var bytes = octets.GetRaw();
-        if (bytes.Length == 5 && bytes[0] == 1) return new System.Net.IPAddress(bytes[1..]).ToString();
-        if (bytes.Length == 17 && bytes[0] == 2) return new System.Net.IPAddress(bytes[1..]).ToString();
-        return Convert.ToHexString(bytes);
-    }
-    private static string TextOrHex(ISnmpData? value)
-    {
-        if (value is not OctetString octets) return value?.ToString() ?? "";
-        var bytes = octets.GetRaw();
-        return bytes.All(x => x is >= 32 and <= 126) ? System.Text.Encoding.UTF8.GetString(bytes) : Mac(value);
     }
 
     // Only one query may run at a time; _cts is shared with the Cancel button.
@@ -521,19 +360,7 @@ public partial class MainWindow : Window
         finally { _cts.Dispose(); _cts = null; SetBusy(false, StatusText.Text); }
     }
 
-    // OctetStrings that are not clean UTF-8 text (MAC addresses, binary IDs) are shown as hex.
-    internal static string DisplayValue(ISnmpData data)
-    {
-        if (data is not OctetString octets) return data.ToString();
-        var bytes = octets.GetRaw();
-        try
-        {
-            var text = new System.Text.UTF8Encoding(false, true).GetString(bytes).TrimEnd('\0');
-            if (!text.Any(ch => char.IsControl(ch) && ch is not ('\r' or '\n' or '\t'))) return text;
-        }
-        catch (System.Text.DecoderFallbackException) { }
-        return string.Join(":", bytes.Select(b => b.ToString("X2")));
-    }
+    private static string DisplayValue(ISnmpData data) => ValueFormat.Display(data);
 
     private void RememberTarget(string host)
     {
@@ -578,11 +405,7 @@ public partial class MainWindow : Window
         return rows.Where(r => selected.Contains(r!)).ToList();
     }
     private List<QueryResult> SelectedResults() => SelectedInOrder(_results, ResultsGrid);
-    private string SymbolicOid(string oid)
-    {
-        var node = ResolveNode(oid);
-        return node == null ? oid : node.Name + oid[node.Oid.Length..];
-    }
+    private string SymbolicOid(string oid) => _mib.Symbolic(oid);
     private bool CopyToClipboard(string text, int count)
     {
         if (text.Length == 0) return false;
@@ -638,7 +461,7 @@ public partial class MainWindow : Window
         if (RejectWhileBusy()) return;
         var oid = CompareOidBox.Text.Trim().TrimStart('.');
         if (oid.Length == 0) { oid = QueryOidBox.Text.Trim().TrimStart('.'); CompareOidBox.Text = oid; }
-        if (!IsNumericOid(oid) || !oid.Split('.').All(part => uint.TryParse(part, out _)))
+        if (!OidUtil.IsValid(oid))
         {
             CompareStatusText.Text = StatusText.Text = Tr($"Ungültige OID: \"{oid}\"", $"Invalid OID: \"{oid}\"");
             return;
@@ -759,120 +582,17 @@ public partial class MainWindow : Window
 
     // ---- Resources tab: CPU, memory, disk, load and sensors from standard MIBs (HOST-RESOURCES, UCD-SNMP, ENTITY-SENSOR).
     // Uses LoadColumnsAsync like the other device tabs; MIBs a device does not implement simply return no rows.
-    private const string HrProcessorLoad = "1.3.6.1.2.1.25.3.3.1.2", HrStorage = "1.3.6.1.2.1.25.2.3.1";
-    private const string UcdMemory = "1.3.6.1.4.1.2021.4", UcdSystemStats = "1.3.6.1.4.1.2021.11", UcdLoad = "1.3.6.1.4.1.2021.10.1.3", UcdDisk = "1.3.6.1.4.1.2021.9.1";
-    private const string EntSensor = "1.3.6.1.2.1.99.1.1.1", EntPhysicalName = "1.3.6.1.2.1.47.1.1.1.1.7";
-
     private async void LoadResources_Click(object sender, RoutedEventArgs e)
     {
-        var roots = new[]
-        {
-            HrProcessorLoad, HrStorage + ".2", HrStorage + ".3", HrStorage + ".4", HrStorage + ".5", HrStorage + ".6",
-            UcdMemory, UcdSystemStats, UcdLoad, UcdDisk + ".2", UcdDisk + ".9",
-            EntSensor + ".1", EntSensor + ".2", EntSensor + ".3", EntSensor + ".4", EntSensor + ".5", EntPhysicalName
-        };
         var target = HostBox.Text.Trim();   // the device LoadColumnsAsync queries, read before the await
-        var c = await LoadColumnsAsync("Resources", roots);
+        var c = await LoadColumnsAsync("Resources", ResourceCheck.Roots);
         if (c == null) return;
         _resourcesTarget = target;
-        var rows = new List<ResourceRow>();
-        var hr = AddHostResources(rows, c[0], c[1], c[2], c[3], c[4], c[5]);
-        var ucd = AddUcd(rows, c[6], c[7], c[8], c[9], c[10]);
-        var sensors = AddSensors(rows, c[11], c[12], c[13], c[14], c[15], c[16]);
-        ResourcesGrid.ItemsSource = rows;
-        var supported = new[] { ("HOST-RESOURCES", hr), ("UCD-SNMP", ucd), ("ENTITY-SENSOR", sensors) };
-        var yes = supported.Where(x => x.Item2).Select(x => x.Item1).ToList();
-        var no = supported.Where(x => !x.Item2).Select(x => x.Item1).ToList();
-        ResourcesSummaryText.Text = Tr("Unterstützt: ", "Supported: ") + (yes.Count > 0 ? string.Join(", ", yes) : "-") +
-            (no.Count > 0 ? Tr(" · Nicht unterstützt: ", " · Not supported: ") + string.Join(", ", no) : "");
-        StatusText.Text = Tr($"Ressourcen: {rows.Count} Werte", $"Resources: {rows.Count} values");
-        Log($"Resources {HostBox.Text.Trim()}: {ResourcesSummaryText.Text}");
-    }
-
-    private static long? Num(Dictionary<string, ISnmpData> column, string key) =>
-        column.TryGetValue(key, out var value) && long.TryParse(value.ToString(), out var n) ? n : null;
-    private static string Gb(double bytes) => bytes >= 1024d * 1024 * 1024 ? $"{bytes / (1024d * 1024 * 1024):0.0} GB" : $"{bytes / (1024d * 1024):0} MB";
-    private static string Percent(double part, double total) => total > 0 ? $"{part * 100 / total:0} %" : "-";
-
-    private bool AddHostResources(List<ResourceRow> rows, Dictionary<string, ISnmpData> load, Dictionary<string, ISnmpData> type,
-        Dictionary<string, ISnmpData> descr, Dictionary<string, ISnmpData> units, Dictionary<string, ISnmpData> size, Dictionary<string, ISnmpData> used)
-    {
-        const string source = "HOST-RESOURCES";
-        var cpus = load.Keys.OrderBy(OidSortKey).ToList();
-        for (var i = 0; i < cpus.Count; i++)
-            rows.Add(new("CPU", Tr($"CPU {i + 1} Last", $"CPU {i + 1} load"), $"{load[cpus[i]]} %", source, $"{HrProcessorLoad}.{cpus[i]}"));
-        if (cpus.Count > 1)
-        {
-            var avg = cpus.Select(k => Num(load, k) ?? 0).Average();
-            rows.Add(new("CPU", Tr("CPU-Durchschnitt", "CPU average"), $"{avg:0} %", source + Tr(" (berechnet)", " (computed)"), "", Tr("Mittelwert aller hrProcessorLoad-Werte", "Average of all hrProcessorLoad values")));
-        }
-        // hrStorageTypes: 2 = RAM, 3 = virtual memory, 4 = fixed disk.
-        foreach (var key in type.Keys.OrderBy(OidSortKey))
-        {
-            var kind = type[key].ToString();
-            var category = kind switch { "1.3.6.1.2.1.25.2.1.2" or "1.3.6.1.2.1.25.2.1.3" => "Memory", "1.3.6.1.2.1.25.2.1.4" => "Disk", _ => null };
-            if (category == null || Num(size, key) is not long total || total <= 0) continue;
-            var unit = Num(units, key) ?? 1;
-            var usedValue = Num(used, key) ?? 0;
-            var name = descr.TryGetValue(key, out var d) ? DisplayValue(d) : key;
-            rows.Add(new(category, name, $"{Percent(usedValue, total)} ({Gb(usedValue * (double)unit)} / {Gb(total * (double)unit)})", source, $"{HrStorage}.6.{key}",
-                Tr($"Belegt = hrStorageUsed × {unit} Bytes, Gesamt = hrStorageSize ({HrStorage}.5.{key})", $"Used = hrStorageUsed × {unit} bytes, total = hrStorageSize ({HrStorage}.5.{key})")));
-        }
-        return load.Count > 0 || type.Count > 0;
-    }
-
-    private bool AddUcd(List<ResourceRow> rows, Dictionary<string, ISnmpData> memory, Dictionary<string, ISnmpData> stats,
-        Dictionary<string, ISnmpData> load, Dictionary<string, ISnmpData> diskPath, Dictionary<string, ISnmpData> diskPercent)
-    {
-        const string source = "UCD-SNMP";
-        if (Num(stats, "11.0") is long idle)
-            rows.Add(new("CPU", Tr("CPU-Auslastung (100 − Leerlauf)", "CPU usage (100 − idle)"), $"{100 - idle} %", source, $"{UcdSystemStats}.11.0", Tr("ssCpuIdle; Auslastung = 100 − Wert", "ssCpuIdle; usage = 100 − value")));
-        // UCD memory values are in KB.
-        if (Num(memory, "5.0") is long totalKb && totalKb > 0)
-        {
-            var avail = Num(memory, "6.0") ?? 0; var buffers = Num(memory, "14.0") ?? 0; var cached = Num(memory, "15.0") ?? 0;
-            var usedKb = Math.Max(0, totalKb - avail - buffers - cached);
-            rows.Add(new("Memory", Tr("RAM belegt (ohne Puffer/Cache)", "RAM used (excl. buffers/cache)"), $"{Percent(usedKb, totalKb)} ({Gb(usedKb * 1024d)} / {Gb(totalKb * 1024d)})", source + Tr(" (berechnet)", " (computed)"), "",
-                Tr("(memTotalReal − memAvailReal − memBuffer − memCached) / memTotalReal", "(memTotalReal − memAvailReal − memBuffer − memCached) / memTotalReal")));
-            rows.Add(new("Memory", "memTotalReal", $"{totalKb:N0} KB", source, $"{UcdMemory}.5.0"));
-            rows.Add(new("Memory", "memAvailReal", $"{avail:N0} KB", source, $"{UcdMemory}.6.0"));
-            if (memory.ContainsKey("14.0")) rows.Add(new("Memory", "memBuffer", $"{buffers:N0} KB", source, $"{UcdMemory}.14.0"));
-            if (memory.ContainsKey("15.0")) rows.Add(new("Memory", "memCached", $"{cached:N0} KB", source, $"{UcdMemory}.15.0"));
-        }
-        if (Num(memory, "3.0") is long swapTotal && swapTotal > 0)
-        {
-            var swapAvail = Num(memory, "4.0") ?? 0;
-            rows.Add(new("Memory", Tr("Swap belegt", "Swap used"), $"{Percent(swapTotal - swapAvail, swapTotal)} ({Gb((swapTotal - swapAvail) * 1024d)} / {Gb(swapTotal * 1024d)})", source, $"{UcdMemory}.4.0", Tr("memAvailSwap; Gesamt = memTotalSwap (.3.0)", "memAvailSwap; total = memTotalSwap (.3.0)")));
-        }
-        foreach (var (key, minutes) in new[] { ("1", 1), ("2", 5), ("3", 15) })
-            if (load.TryGetValue(key, out var value))
-                rows.Add(new("Load", Tr($"Systemlast {minutes} min", $"Load average {minutes} min"), DisplayValue(value), source, $"{UcdLoad}.{key}"));
-        foreach (var key in diskPercent.Keys.OrderBy(OidSortKey))
-            rows.Add(new("Disk", diskPath.TryGetValue(key, out var path) ? DisplayValue(path) : key, $"{diskPercent[key]} %", source, $"{UcdDisk}.9.{key}"));
-        return memory.Count > 0 || stats.Count > 0 || load.Count > 0 || diskPercent.Count > 0;
-    }
-
-    private bool AddSensors(List<ResourceRow> rows, Dictionary<string, ISnmpData> type, Dictionary<string, ISnmpData> scale,
-        Dictionary<string, ISnmpData> precision, Dictionary<string, ISnmpData> value, Dictionary<string, ISnmpData> status, Dictionary<string, ISnmpData> names)
-    {
-        // RFC 3433 SensorDataScale (note exa(14) before peta(15)) and SensorDataType units.
-        var exponents = new Dictionary<long, int> { [1] = -24, [2] = -21, [3] = -18, [4] = -15, [5] = -12, [6] = -9, [7] = -6, [8] = -3, [9] = 0, [10] = 3, [11] = 6, [12] = 9, [13] = 12, [14] = 18, [15] = 15, [16] = 21, [17] = 24 };
-        foreach (var key in value.Keys.OrderBy(OidSortKey))
-        {
-            if (Num(value, key) is not long raw) continue;
-            var kind = Num(type, key) ?? 2;
-            var real = raw * Math.Pow(10, exponents.GetValueOrDefault(Num(scale, key) ?? 9) - (Num(precision, key) ?? 0));
-            var text = kind switch
-            {
-                8 => $"{real:0.#} °C", 10 => $"{real:0} RPM", 3 => $"{real:0.##} V AC", 4 => $"{real:0.##} V DC", 5 => $"{real:0.##} A", 6 => $"{real:0.#} W",
-                7 => $"{real:0.#} Hz", 9 => $"{real:0.#} %RH", 11 => $"{real:0.#} CMM", 12 => raw == 1 ? "true" : "false", _ => real.ToString("0.###")
-            };
-            var state = Num(status, key) switch { 2 => Tr(" (nicht verfügbar)", " (unavailable)"), 3 => Tr(" (außer Betrieb)", " (nonoperational)"), _ => "" };
-            var name = names.TryGetValue(key, out var n) && DisplayValue(n).Length > 0 ? DisplayValue(n) : $"Sensor {key}";
-            rows.Add(new("Sensor", name, text + state, "ENTITY-SENSOR", $"{EntSensor}.4.{key}",
-                Tr($"Rohwert {raw}, Typ {kind}, Skala {Num(scale, key)}, Präzision {Num(precision, key)}", $"Raw {raw}, type {kind}, scale {Num(scale, key)}, precision {Num(precision, key)}")));
-        }
-        return value.Count > 0;
+        var result = ResourceCheck.Build(c, L);
+        ResourcesGrid.ItemsSource = result.Rows;
+        ResourcesSummaryText.Text = result.Summary(L);
+        StatusText.Text = Tr($"Ressourcen: {result.Rows.Count} Werte", $"Resources: {result.Rows.Count} values");
+        Log($"Resources {target}: {ResourcesSummaryText.Text}");
     }
 
     private List<ResourceRow> SelectedResourceRows() => SelectedInOrder(ResourcesGrid.Items.OfType<ResourceRow>(), ResourcesGrid);
@@ -910,25 +630,14 @@ public partial class MainWindow : Window
 
     private void PopulateWalkTable(IList<Variable> variables)
     {
-        var cells = new List<(string Index,string Column,string Value)>();
-        foreach (var variable in variables)
-        {
-            var oid=variable.Id.ToString(); var node=ResolveNode(oid);
-            var column=node?.Name ?? oid; var index=node != null && oid.Length>node.Oid.Length ? oid[(node.Oid.Length+1)..] : "0";
-            cells.Add((index,column,DisplayValue(variable.Data)));
-        }
-        var table=new DataTable(); table.Columns.Add(_language=="de"?"Index":"Index");
-        foreach(var name in cells.Select(x=>x.Column).Distinct()) table.Columns.Add(name);
-        foreach(var group in cells.GroupBy(x=>x.Index).OrderBy(x=>OidSortKey(string.IsNullOrWhiteSpace(x.Key)?"0":x.Key)))
-        {
-            var row=table.NewRow(); row[0]=group.Key;
-            foreach(var cell in group) row[cell.Column]=cell.Value;
-            table.Rows.Add(row);
-        }
-        WalkTableGrid.ItemsSource=table.DefaultView;
+        var walk = WalkTable.Build(variables, _mib);
+        var table = new DataTable();
+        foreach (var name in walk.Columns) table.Columns.Add(name);
+        foreach (var cells in walk.Rows) table.Rows.Add(cells.Select(x => (object?)x ?? DBNull.Value).ToArray());
+        WalkTableGrid.ItemsSource = table.DefaultView;
     }
 
-    private MibNode? ResolveNode(string oid) => _nodes.Where(n => oid == n.Oid || oid.StartsWith(n.Oid + ".", StringComparison.Ordinal)).OrderByDescending(n => n.Oid.Length).FirstOrDefault();
+    private MibNode? ResolveNode(string oid) => _mib.Resolve(oid);
     private MonitorWindow? _monitorWindow;
     private MonitorWindow ShowMonitor()
     {
@@ -992,6 +701,7 @@ public partial class MainWindow : Window
     private void Log(string text) { LogBox.AppendText($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}\r\n"); LogBox.ScrollToEnd(); }
     private void ShowError(string title, Exception ex) { StatusText.Text = title; Log($"{Tr("FEHLER", "ERROR")}: {title}: {ex.Message}"); MessageBox.Show(ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error); }
     private string Tr(string de, string en) => _language == "de" ? de : en;
+    private Lang L => Lang.From(_language);
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
     private void ClearResults_Click(object sender, RoutedEventArgs e) => _results.Clear();
     private void Settings_Click(object sender, RoutedEventArgs e)
@@ -1193,53 +903,28 @@ public partial class MainWindow : Window
 
     private void UpdateMibStatus()
     {
-        MibStatus.Text = _loadedMibFileCount is int files
+        MibStatus.Text = _mib.LoadedFileCount is int files
             ? Tr($"{_nodes.Count:N0} Objekte aus {files:N0} Datei(en)", $"{_nodes.Count:N0} objects from {files:N0} file(s)")
             : Tr($"{_nodes.Count:N0} Standardobjekte automatisch geladen", $"{_nodes.Count:N0} standard objects loaded automatically");
     }
 
     private void LoadSettings()
     {
-        try
-        {
-            if (File.Exists(_settingsPath))
-            {
-                var s = JsonSerializer.Deserialize<UserSettings>(File.ReadAllText(_settingsPath));
-                if (s != null) _settings = s;
-            }
-        }
-        catch (Exception ex)
-        {
-            // Keep the unreadable file instead of overwriting it with defaults on the next save.
-            try { File.Copy(_settingsPath, _settingsPath + ".bak", true); } catch { }
-            Dispatcher.BeginInvoke(() => Log(Tr($"WARNUNG: settings.json konnte nicht gelesen werden ({ex.Message}); Kopie unter settings.json.bak.", $"WARNING: settings.json could not be read ({ex.Message}); a copy was kept as settings.json.bak.")));
-        }
-        if (_settings.Profiles.Count == 0)
-        {
-            _settings.Profiles.Add(new SnmpProfile { Name = "Default" });
-            _settings.SelectedProfile = "Default";
-        }
+        _settings = _store.Load(out var warning);
+        if (warning != null)
+            Dispatcher.BeginInvoke(() => Log(Tr($"WARNUNG: settings.json konnte nicht gelesen werden ({warning}); Kopie unter settings.json.bak.", $"WARNING: settings.json could not be read ({warning}); a copy was kept as settings.json.bak.")));
         _language = _settings.Language; _dark = _settings.Dark;
     }
 
     private void SaveSettings()
     {
-        try
-        {
-            _settings.Language=_language; _settings.Dark=_dark; _settings.RecentTargets=[.. _recentTargets];
-            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
-            // Write to a temporary file first so a crash during the write cannot leave a truncated settings.json.
-            var temp = _settingsPath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(_settings,new JsonSerializerOptions{WriteIndented=true}));
-            File.Move(temp, _settingsPath, true);
-        }
-        catch { }
+        _settings.Language = _language; _settings.Dark = _dark; _settings.RecentTargets = [.. _recentTargets];
+        _store.Save(_settings);
     }
 
     private async Task LoadDefaultMibFolderAsync()
     {
         if (string.IsNullOrWhiteSpace(_settings.MibFolder) || !Directory.Exists(_settings.MibFolder)) return;
-        var files=Directory.EnumerateFiles(_settings.MibFolder,"*",SearchOption.AllDirectories).Where(x=>new[]{".mib",".my",".txt",""}.Contains(Path.GetExtension(x).ToLowerInvariant()));
-        await LoadMibsAsync(files);
+        await LoadMibsAsync(MibLibrary.MibFilesIn(_settings.MibFolder));
     }
 }
