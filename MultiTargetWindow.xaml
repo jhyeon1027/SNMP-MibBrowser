@@ -20,7 +20,7 @@
    </StackPanel>
   </Grid>
   <WrapPanel Grid.Row="1">
-   <Button x:Name="RunButton" Style="{StaticResource AccentButton}" Content="▶  Run" Click="Run_Click"/><Button x:Name="StopButton" Content="■  Stop" IsEnabled="False" Click="Stop_Click"/><Button x:Name="ClearButton" Content="⌫  Clear" ToolTip="Clear the results (targets and OIDs are kept)" Click="Clear_Click"/>
+   <Button x:Name="RunButton" Style="{StaticResource AccentButton}" Content="▶  Run" Click="Run_Click"/><Button x:Name="StopButton" Content="■  Stop" IsEnabled="False" Click="Stop_Click"/><Button x:Name="RerunButton" Content="↻  Re-run failed" ToolTip="Query only the failed targets again (current version and communities, same OIDs)" IsEnabled="False" Click="RerunFailed_Click"/><Button x:Name="ClearButton" Content="⌫  Clear" ToolTip="Clear the results (targets and OIDs are kept)" Click="Clear_Click"/>
    <CheckBox x:Name="FailedOnlyBox" Content="Failed only" VerticalAlignment="Center" Margin="8,0" Foreground="{DynamicResource TextBrush}" Checked="FailedOnly_Changed" Unchecked="FailedOnly_Changed"/>
    <ProgressBar x:Name="RunProgress" Width="140" Height="10" Margin="8,0" VerticalAlignment="Center" Visibility="Collapsed"/>
    <TextBlock x:Name="ProgressText" VerticalAlignment="Center" Margin="4,0" Foreground="{DynamicResource SubtleTextBrush}"/>

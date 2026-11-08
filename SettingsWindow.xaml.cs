@@ -15,7 +15,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(UserSettings settings, string language)
     {
         InitializeComponent(); _language = language;
-        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, IncludePrereleases=settings.IncludePrereleases, RecentTargets=[.. settings.RecentTargets],
+        ResultSettings = new UserSettings { Language=settings.Language, Dark=settings.Dark, MibFolder=settings.MibFolder, SelectedProfile=settings.SelectedProfile, IncludePrereleases=settings.IncludePrereleases, RecentTargets=[.. settings.RecentTargets], MultiTargets=settings.MultiTargets, MultiPresetOids=settings.MultiPresetOids, MultiCustomOids=settings.MultiCustomOids,
             Profiles=settings.Profiles.Select(Clone).ToList() };
         _profiles = new(ResultSettings.Profiles); ProfilesList.ItemsSource = _profiles; MibFolderBox.Text = settings.MibFolder;
         Localize(); if (_profiles.Count > 0) ProfilesList.SelectedIndex = 0;

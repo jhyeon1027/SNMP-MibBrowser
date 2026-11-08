@@ -770,7 +770,7 @@ public partial class MainWindow : Window
     private void MultiTarget_Click(object sender, RoutedEventArgs e)
     {
         if (_multiTargetWindow is { IsLoaded: true }) { _multiTargetWindow.Activate(); return; }
-        _multiTargetWindow = new MultiTargetWindow(_snmp, host => Options() with { Host = host }, SetTargetFromMultiTarget, _language) { Owner = this };
+        _multiTargetWindow = new MultiTargetWindow(_snmp, host => Options() with { Host = host }, SetTargetFromMultiTarget, () => _settings, SaveSettings, _language) { Owner = this };
         _multiTargetWindow.Show();
     }
     private void SetTargetFromMultiTarget(string host)

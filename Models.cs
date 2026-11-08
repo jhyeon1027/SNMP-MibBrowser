@@ -56,6 +56,10 @@ public sealed class UserSettings
     public string SelectedProfile { get; set; } = "";
     public bool IncludePrereleases { get; set; }
     public List<string> RecentTargets { get; set; } = [];
+    // Multi-target window inputs, restored the next time it opens. MultiPresetOids == null means defaults.
+    public string MultiTargets { get; set; } = "";
+    public List<string>? MultiPresetOids { get; set; }
+    public string MultiCustomOids { get; set; } = "";
 }
 
 public sealed record GitHubRelease(string Tag, string Name, string Notes, bool Prerelease, string PageUrl, string AssetUrl, string AssetName, string Digest);
@@ -89,7 +93,11 @@ public sealed class CompareRow(string oid, string name, string type, int rounds)
 public sealed class MultiTargetRow(string target, int oidCount) : System.ComponentModel.INotifyPropertyChanged
 {
     public string Target { get; } = target;
+    // IPv4 targets sort numerically (192.168.2.9 before 192.168.2.10); host names after them.
+    public string SortKey { get; } = System.Net.IPAddress.TryParse(target, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+        ? string.Concat(ip.GetAddressBytes().Select(b => b.ToString("D3"))) : "~" + target.ToLowerInvariant();
     public string Status { get; private set; } = "";
+    public string Detail { get; private set; } = "";
     public string Community { get; private set; } = "";
     public string Duration { get; private set; } = "";
     public bool Failed { get; private set; }
@@ -97,9 +105,15 @@ public sealed class MultiTargetRow(string target, int oidCount) : System.Compone
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
-    public void SetResult(string status, bool failed, string community, string duration)
+    public void SetResult(string status, bool failed, string community, string duration, string detail = "")
     {
-        Status = status; Failed = failed; Community = community; Duration = duration;
-        foreach (var name in new[] { nameof(Status), nameof(Failed), nameof(Community), nameof(Duration) }) PropertyChanged?.Invoke(this, new(name));
+        Status = status; Failed = failed; Community = community; Duration = duration; Detail = detail;
+        foreach (var name in new[] { nameof(Status), nameof(Failed), nameof(Community), nameof(Duration), nameof(Detail) }) PropertyChanged?.Invoke(this, new(name));
+    }
+
+    public void Reset()
+    {
+        for (var i = 0; i < Values.Count; i++) Values[i] = "";
+        SetResult("", false, "", "");
     }
 }
