@@ -1,8 +1,13 @@
 # SNMP MibBrowser
 
-Current version: **1.0.7 build17**
+Current version: **1.1.0 build18**
 
-Open-source MIB browser and SNMP diagnostics tool for Windows, built with WPF and .NET 9. The interface is inspired by ACLI Session Manager and supports English and German as well as persistent light and dark themes.
+Open-source MIB browser and SNMP diagnostics tool. It comes as two programs that share the same SNMP code and settings format:
+
+- **SNMP MibBrowser.exe** — Windows desktop app (WPF, .NET 9), English and German, light and dark themes.
+- **snmpmb** — terminal (TUI) app for Linux servers without a desktop, used over SSH (Termius, MobaXterm, Windows `ssh`). See [Linux terminal version](#linux-terminal-version-snmpmb).
+
+Both are single files that need no installation, also on air-gapped networks.
 
 ## Features
 
@@ -38,14 +43,59 @@ Open-source MIB browser and SNMP diagnostics tool for Windows, built with WPF an
 - Dedicated SNMP SET tab with OID, data type, and value fields
 - Protected built-in public MIB tree; imported files extend only `private.enterprises` and `experimental`
 - Deduplicated MIB imports that preserve built-in public MIB definitions
+- Query any numeric OID from the toolbar; WALK depth limit; GET NEXT puts the returned OID back into the OID field
+- Ordered community list per profile (tried in order, the accepted one is logged), per-profile timeout and retries
+- Recent targets, copy helpers (context menu, Ctrl+C, double-click), hex display of binary values
+- WALK compare: walk an OID 2-10 times and highlight values that changed
+- Multi-target query: the same OIDs from many targets (ranges like `10.1.1.10-20`), 10 in parallel, with failure reasons
+- Resources: CPU, memory, disk, load and sensors from HOST-RESOURCES, UCD-SNMP and ENTITY-SENSOR
+- Monitor: graphs of OIDs over time, counters as per-second rates
 
 ## Run from source
 
 ```powershell
-dotnet run --project SnmpMibBrowser.csproj
+dotnet run --project SnmpMibBrowser.csproj          # Windows app (.NET 9 SDK)
+dotnet run --project Tui/SnmpMibBrowser.Tui.csproj  # terminal app (.NET 10 SDK)
 ```
 
+The shared SNMP logic is in `Core/`. The version of all projects is set in `Directory.Build.props`.
+
 Alternatively, download and run the published `SNMP MibBrowser.exe`.
+
+## Linux terminal version (snmpmb)
+
+`snmpmb` has the same functions as the Windows app in a terminal user interface: GET/GET NEXT/WALK/SET, MIB tree and MIB import, WALK table, Devices (interfaces, IP, routes, ARP, LLDP), Resources, WALK compare, multi-target query and monitor.
+
+**Requirements:** Linux x64 supported by .NET 10, for example Ubuntu 22.04/24.04 or RHEL/Rocky 8 and later (CentOS 7 is too old). Nothing else needs to be installed. A terminal of at least 100×30 is recommended.
+
+**Install:** download `snmpmb-linux-x64.tar.gz` from the release and unpack it; the file is ready to run.
+
+```bash
+tar -xzf snmpmb-linux-x64.tar.gz
+./snmpmb 192.0.2.10
+```
+
+If you copy the bare `snmpmb` file instead (for example with WinSCP), run `chmod +x snmpmb` once.
+
+**Keys** (F1 shows all of them):
+
+| Key | Action |
+| --- | --- |
+| F2 / F3 / F4 / F5 | GET / GET NEXT / WALK / SET |
+| F6 / F7 | Copy selected rows (OSC 52) / show the table as plain text |
+| F8 | Connection settings: profiles, version, community list, SNMPv3, timeout |
+| F9 / F11 / Ctrl+W | Multi-target query / monitor / add the selected rows to the monitor |
+| F12 | Hand the mouse to the terminal for selecting and copying text, and back |
+| Alt+1..7 | Tabs: Results, WALK table, Compare, Devices, Resources, MIB details, Log |
+| Ctrl+T | Show or hide the MIB tree |
+| Esc / Ctrl+Q | Cancel a running query / quit |
+| F10 | Menu |
+
+**Copying text:** press F12 (or open a text view with F7 or Enter on a row) and select with the mouse as usual: Termius drag and Ctrl+Shift+C, MobaXterm drag and right-click > Copy. `--no-mouse` starts with the mouse on the terminal side.
+
+**Settings:** `~/.config/snmp-mibbrowser/settings.json` (or `$XDG_CONFIG_HOME/snmp-mibbrowser`), readable by the owner only because it holds communities and SNMPv3 keys. The format is the same as on Windows (`%LOCALAPPDATA%\SNMP-MibBrowser\settings.json`), so profiles can be copied over. Errors are written to `error.log` in the same folder.
+
+**Options:** `--no-mouse`, `--driver ansi|dotnet` (try another driver if keys or drawing misbehave), `--version`, `--help`.
 
 ## Updates and GitHub releases
 

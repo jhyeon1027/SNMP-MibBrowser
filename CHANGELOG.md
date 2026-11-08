@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 build18
+
+- New: `snmpmb`, a terminal (TUI) version for Linux servers without a desktop, used over SSH. Same functions as the Windows app: GET/GET NEXT/WALK/SET, MIB tree and import, WALK table, Devices, Resources, WALK compare, multi-target query and monitor, profiles with community lists and SNMPv3. Released as `snmpmb-linux-x64.tar.gz` (single file, no installation).
+- The SNMP logic moved into a shared library used by both apps; the settings file format is the same on Windows and Linux.
+- The Windows app is unchanged in behavior.
+
 ## 1.0.7 build17
 
 - Resources tab: CPU, memory, disk, load and sensor values from HOST-RESOURCES, UCD-SNMP and ENTITY-SENSOR, with the OID that holds each value.

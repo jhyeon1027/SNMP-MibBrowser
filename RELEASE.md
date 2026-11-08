@@ -22,12 +22,13 @@ git tag v1.1.0-beta.1
 git push origin v1.1.0-beta.1
 ```
 
-The workflow builds the portable Windows x64 single-file executable, creates a source archive, and uploads both files to the GitHub release. The integrated updater recognizes assets named `SNMP MibBrowser.exe` or `SNMP-MibBrowser.exe`.
+The workflow builds the portable Windows x64 executable (`SNMP MibBrowser.exe`) and the Linux terminal app (`snmpmb-linux-x64.tar.gz`, with a smoke test), creates a source archive and `SHA256SUMS.txt` (which also lists the unpacked `snmpmb`), and uploads everything to the GitHub release. The integrated Windows updater recognizes assets named `SNMP MibBrowser.exe` or `SNMP-MibBrowser.exe`.
 
 ## Checklist
 
-- Update the version and build string.
-- Run `dotnet build -c Release` locally.
+- Update the version in `Directory.Build.props` and the build string in `MainWindow.xaml`, `README.md` and `CHANGELOG.md`.
+- Run `dotnet build SnmpMibBrowser.csproj -c Release` and `dotnet publish Tui/SnmpMibBrowser.Tui.csproj -c Release -r linux-x64` locally.
 - Verify light and dark themes in both English and German.
 - Test SNMP GET, WALK, tables, and update checking.
+- Run `snmpmb` in an SSH terminal (Termius or MobaXterm): GET/WALK, F12 copy, Ctrl+Q.
 - Create the tag and ensure the GitHub Actions workflow completes successfully.

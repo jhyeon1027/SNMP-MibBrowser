@@ -8,7 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
+    name: Windows app (WPF, win-x64)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -17,19 +18,65 @@ jobs:
           dotnet-version: 9.0.x
       - name: Publish single-file Windows executable
         run: dotnet publish SnmpMibBrowser.csproj -c Release -o artifacts
-      - name: Create source archive
-        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/SNMP MibBrowser.exe
+          if-no-files-found: error
+
+  linux:
+    name: Terminal app (TUI, linux-x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+      - name: Publish single-file Linux executable
+        run: dotnet publish Tui/SnmpMibBrowser.Tui.csproj -c Release -r linux-x64 -o out
+      - name: Smoke test
         run: |
-          $files = Get-ChildItem -Force | Where-Object { $_.Name -notin @('.git', 'bin', 'obj', 'artifacts') }
-          Compress-Archive -Path $files.FullName -DestinationPath artifacts/SNMP-MibBrowser-Source-${{ github.ref_name }}.zip
+          chmod +x out/snmpmb
+          out/snmpmb --version
+          out/snmpmb --help
+      # tar keeps the executable bit, so the file runs right after unpacking.
+      - name: Pack
+        run: tar -czf snmpmb-linux-x64.tar.gz -C out snmpmb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            snmpmb-linux-x64.tar.gz
+            out/snmpmb
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [ windows, linux ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create source archive and checksums
+        run: |
+          mkdir release
+          cp "dist/windows/SNMP MibBrowser.exe" release/
+          cp dist/linux/snmpmb-linux-x64.tar.gz release/
+          git archive --format=zip -o "release/SNMP-MibBrowser-Source-${GITHUB_REF_NAME}.zip" HEAD
+          cd release
+          sha256sum "SNMP MibBrowser.exe" snmpmb-linux-x64.tar.gz "SNMP-MibBrowser-Source-${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt
+          # Hash of the unpacked Linux executable, for allow-lists on the server.
+          (cd ../dist/linux/out && sha256sum snmpmb) >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - name: Create GitHub release and upload assets
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $exe = 'artifacts/SNMP MibBrowser.exe'
-          $source = 'artifacts/SNMP-MibBrowser-Source-${{ github.ref_name }}.zip'
-          (Get-FileHash -Algorithm SHA256 $exe).Hash + '  SNMP MibBrowser.exe' | Set-Content artifacts/SHA256SUMS.txt
-          $arguments = @('release', 'create', '${{ github.ref_name }}', $exe, $source, 'artifacts/SHA256SUMS.txt', '--generate-notes')
-          if ('${{ github.ref_name }}' -match '-') { $arguments += '--prerelease' }
-          gh @arguments
+          cd release
+          args=(release create "$GITHUB_REF_NAME" "SNMP MibBrowser.exe" snmpmb-linux-x64.tar.gz "SNMP-MibBrowser-Source-${GITHUB_REF_NAME}.zip" SHA256SUMS.txt --generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then args+=(--prerelease); fi
+          gh "${args[@]}"
