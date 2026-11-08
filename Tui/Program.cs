@@ -61,8 +61,7 @@ catch (ArgumentException ex) when (driver != null)
 }
 using (app)
 {
-    if (noMouse) app.Mouse.IsMouseDisabled = true;
-    using var main = new MainView(store, host);
+    using var main = new MainView(store, host, noMouse);
     // A closed SSH session (SIGHUP) or kill (SIGTERM) ends the program normally, so the terminal is restored.
     using var hup = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGHUP, Stop);
     using var term = System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, Stop);

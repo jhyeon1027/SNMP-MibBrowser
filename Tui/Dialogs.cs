@@ -24,14 +24,20 @@ public static class Dialogs
         return dialog.Canceled ? null : field.Text.Trim();
     }
 
-    /// <summary>Read-only text in a large window. With the mouse released (--no-mouse) the terminal's own selection copies it.</summary>
+    /// <summary>
+    /// Read-only text on the whole screen, without a frame, so terminal lines hold only the text. The mouse is handed
+    /// to the terminal while it is open: drag to select and copy with the terminal (Termius Ctrl+Shift+C, MobaXterm right-click).
+    /// </summary>
     public static void ShowText(IApplication app, string title, string text, string hint)
     {
-        var view = new TextView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), ReadOnly = true, WordWrap = false, Text = text };
-        using var dialog = new Dialog { Title = title, Width = Dim.Percent(95), Height = Dim.Percent(90) };
-        dialog.Add(view, new Label { Text = hint, X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill() });
-        dialog.AddButton(new Button { Text = "Close" });
-        app.Run(dialog);
+        var header = new Label { X = 0, Y = 0, Width = Dim.Fill(), Text = $"{title}  —  drag with the mouse to select, copy with the terminal; ↑↓ PgUp PgDn scroll; Esc closes" };
+        var view = new TextView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(1), ReadOnly = true, WordWrap = false, Text = text };
+        using var dialog = new Dialog { Width = Dim.Fill(), Height = Dim.Fill(), BorderStyle = Terminal.Gui.Drawing.LineStyle.None, ShadowStyle = null };
+        dialog.Add(header, view, new Label { Text = hint, X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill() });
+        var wasReleased = TerminalMouse.Released;
+        TerminalMouse.Set(app, true);
+        try { app.Run(dialog); }
+        finally { if (!wasReleased) TerminalMouse.Set(app, false); }
     }
 
     /// <summary>Picks one entry of a list; null when cancelled.</summary>

@@ -44,6 +44,23 @@ public static class TableViewExtensions
 }
 
 /// <summary>
+/// Hands the mouse to the terminal (or back to the app). While the app has it, the terminal reports clicks and
+/// drags to the app and cannot select text; released, drag-select and the terminal's copy work again.
+/// Sends the xterm mouse-tracking off/on sequences, because ignoring mouse events alone leaves tracking on.
+/// </summary>
+public static class TerminalMouse
+{
+    public static bool Released { get; private set; }
+
+    public static void Set(IApplication app, bool release)
+    {
+        Released = release;
+        app.Mouse.IsMouseDisabled = release;
+        app.Driver?.WriteRaw(release ? Terminal.Gui.Drivers.EscSeqUtils.CSI_DisableMouseEvents : Terminal.Gui.Drivers.EscSeqUtils.CSI_EnableMouseEvents);
+    }
+}
+
+/// <summary>
 /// Copies text to the clipboard of the PC running the terminal, using the OSC 52 escape sequence
 /// (works over SSH in terminals that support it, e.g. Windows Terminal; others ignore it silently).
 /// </summary>

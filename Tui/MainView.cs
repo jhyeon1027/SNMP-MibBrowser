@@ -9,7 +9,7 @@ using Terminal.Gui.Views;
 namespace SnmpMibBrowser.Tui;
 
 /// <summary>Main screen: connection bar, OID bar, MIB tree on the left, result tabs on the right.</summary>
-public sealed class MainView : Runnable
+public sealed partial class MainView : Runnable
 {
     private const int MaxRecentTargets = 20;
 
@@ -38,7 +38,7 @@ public sealed class MainView : Runnable
     private bool _mibVisible = true;
     private readonly View _resultsTab, _detailsTab, _logTab;
 
-    public MainView(SettingsStore store, string? host)
+    public MainView(SettingsStore store, string? host, bool startWithoutMouse = false)
     {
         _store = store;
         _settings = store.Load(out var warning);
@@ -66,7 +66,14 @@ public sealed class MainView : Runnable
             new MenuItem("GET _NEXT", "F3", () => _ = GetNextAsync()),
             new MenuItem("_WALK", "F4", () => _ = WalkAsync()),
             new MenuItem("_SET…", "F5", () => _ = SetAsync()),
-            new MenuItem("_Cancel query", "Esc", CancelQuery)
+            new MenuItem("_Cancel query", "Esc", CancelQuery),
+            new Line(),
+            new MenuItem("_Interfaces", "", () => _ = LoadInterfacesAsync()),
+            new MenuItem("IP _addresses", "", () => _ = LoadIpAsync()),
+            new MenuItem("_Routing table", "", () => _ = LoadRoutesAsync()),
+            new MenuItem("AR_P table", "", () => _ = LoadArpAsync()),
+            new MenuItem("_LLDP neighbors", "", () => _ = LoadLldpAsync()),
+            new MenuItem("Res_ources", "", () => _ = LoadResourcesAsync())
         ]));
         menu.Add(new MenuBarItem("_Results",
         [
@@ -136,7 +143,8 @@ public sealed class MainView : Runnable
         _logTab = new View { Title = "Log", Width = Dim.Fill(), Height = Dim.Fill() };
         _logTab.Add(_log);
         _tabs = new Tabs { X = Pos.Right(mibFrame), Y = 3, Width = Dim.Fill(), Height = Dim.Fill(2) };
-        _tabs.Add(_resultsTab, _detailsTab, _logTab);
+        BuildTableTabs();
+        _tabs.Add(_resultsTab, _walkTab, _devicesTab, _resourcesTab, _detailsTab, _logTab);
         _tabs.Value = _resultsTab;
 
         // ---- status line and key bar
@@ -146,7 +154,7 @@ public sealed class MainView : Runnable
         keys.Add(
             Key_(Key.F1, "Help", ShowKeys), Key_(Key.F2, "GET", () => _ = GetAsync()), Key_(Key.F3, "NEXT", () => _ = GetNextAsync()),
             Key_(Key.F4, "WALK", () => _ = WalkAsync()), Key_(Key.F5, "SET", () => _ = SetAsync()), Key_(Key.F6, "Copy", CopySelected),
-            Key_(Key.F7, "Text", ShowResultsText), Key_(Key.F8, "Conn", EditConnection), Key_(Key.T.WithCtrl, "Tree", ToggleMibTree), Key_(Key.Q.WithCtrl, "Quit", RequestQuit));
+            Key_(Key.F7, "Text", ShowResultsText), Key_(Key.F8, "Conn", EditConnection), Key_(Key.T.WithCtrl, "Tree", ToggleMibTree), Key_(Key.F12, "Mouse", ToggleMouse), Key_(Key.Q.WithCtrl, "Quit", RequestQuit));
 
         Add(menu, hostLabel, _host, recent, versionLabel, _version, communityLabel, _community, _communityExtra, portLabel, _port,
             oidLabel, _oid, depthLabel, _depth, get, next, walk, set, clear, mibFrame, _tabs, _status, _profileLabel, keys);
@@ -179,6 +187,12 @@ public sealed class MainView : Runnable
         _snmp.CommunityAccepted += (h, community, index, total) =>
             App?.Invoke(() => Log($"{h}: community \"{community}\" accepted (attempt {index}/{total})."));
         // Esc cancels a running query instead of closing the program; Ctrl+Q quits.
+        IsRunningChanged += (_, e) =>
+        {
+            if (App == null) return;
+            if (e.Value) App.Keyboard.KeyDown += OnAppKeyDown; else App.Keyboard.KeyDown -= OnAppKeyDown;
+            if (e.Value && startWithoutMouse) ToggleMouse();
+        };
         IsRunningChanging += (_, e) =>
         {
             if (e.NewValue || _quitting) return;
@@ -386,6 +400,7 @@ public sealed class MainView : Runnable
                     ValueFormat.Display(v.Data), $"{sw.ElapsedMilliseconds} ms", options.Host));
             }
             _resultsTable.Update();
+            if (operation == "WALK") PopulateWalkTable(oid, answer);
             if (answer.Count > 0)
             {
                 _tabs.Value = _resultsTab;
@@ -496,19 +511,29 @@ public sealed class MainView : Runnable
 
     private void CopySelected()
     {
-        var rows = _resultsTable.SelectedRows();
+        if (CurrentTable() is not { } table) { SetStatus("Switch to a table tab to copy rows."); return; }
+        var rows = table.SelectedRows();
         if (rows.Count == 0) { SetStatus("No rows to copy."); return; }
-        TerminalClipboard.Copy(App!, _resultsTable.RowsAsText(rows));
+        TerminalClipboard.Copy(App!, table.RowsAsText(rows));
         SetStatus($"Sent {rows.Count} row(s) to the terminal clipboard (OSC 52). If nothing arrives, use F7 (Text).");
     }
 
     private void ShowResultsText()
     {
+        if (CurrentTable() is { } other && other != _resultsTable)
+        {
+            if (other.Table is not { Rows: > 0 } source) { SetStatus("The table is empty."); return; }
+            var selected = other.SelectedRows();
+            if (selected.Count <= 1) selected = Enumerable.Range(0, source.Rows).ToList();
+            Dialogs.ShowText(App!, $"Table ({selected.Count} rows, tab-separated)", other.RowsAsText(selected),
+                CopyHint);
+            return;
+        }
         var rows = _resultsTable.SelectedRows();
         if (rows.Count <= 1) rows = Enumerable.Range(0, _results.Count).ToList();
         if (rows.Count == 0) { SetStatus("No results yet."); return; }
         Dialogs.ShowText(App!, $"Results ({rows.Count} rows)", string.Join("\n", rows.Select(r => _results[r]).Select(r => $"{_mib.Symbolic(r.Oid)} = {r.Type}: {r.Value}")),
-            "Select with the mouse (Shift+drag, or start with --no-mouse) and copy with the terminal.");
+            CopyHint);
     }
 
     private void ClearResults()
@@ -545,6 +570,15 @@ public sealed class MainView : Runnable
         _resultsTable.Update();
     }
 
+    // F12: hand the mouse to the terminal for selecting and copying text, or take it back.
+    private void ToggleMouse()
+    {
+        TerminalMouse.Set(App!, !TerminalMouse.Released);
+        SetStatus(TerminalMouse.Released
+            ? "Mouse → terminal: drag to select, copy with the terminal (Termius Ctrl+Shift+C, MobaXterm right-click). F12 gives it back."
+            : "Mouse → app: click fields, rows and tabs. F12 hands it to the terminal for copying.");
+    }
+
     private void ToggleMibTree()
     {
         _mibVisible = !_mibVisible;
@@ -567,7 +601,7 @@ public sealed class MainView : Runnable
         if (_resultsTable.SelectedRows() is not [var index, ..] || index >= _results.Count) return;
         var r = _results[index];
         Dialogs.ShowText(App!, "Result", $"Time:      {r.Timestamp}\nOperation: {r.Operation}\nTarget:    {r.Target}\nOID:       {r.Oid}\nName:      {_mib.Symbolic(r.Oid)}\nType:      {r.Type}\nDuration:  {r.Duration}\n\nValue:\n{r.Value}",
-            "F6 copies the selected rows; select text with the terminal (Shift+drag or --no-mouse).");
+            CopyHint);
     }
 
     // ================= misc
@@ -590,9 +624,15 @@ public sealed class MainView : Runnable
         Down in Host field                  recent targets
         Tree: Enter = GET (scalar) or WALK (table/branch), arrows to move/expand
         Ctrl+T  show/hide the MIB tree (more room for the results)
+        Alt+1..6  tabs: Results, WALK table, Devices, Resources, MIB details, Log
+        Devices tab: buttons, or Query menu (F9) -> Interfaces, IP, Routing, ARP, LLDP
+        Resources tab: Alt+C check.  Enter on any table row shows the whole row.
+        F6 / F7 act on the table of the visible tab.
         Tab / Shift+Tab move between fields; F9 or Alt opens the menu.
 
-        Start with --no-mouse to select text with the terminal's own mouse selection.
+        F12 Mouse: hand the mouse to the terminal to select and copy text (Termius: drag, Ctrl+Shift+C;
+            MobaXterm: drag, right-click > Copy), F12 again to click in the app. F7 does this by itself.
+        Start with --no-mouse to begin with the mouse on the terminal side.
         """, "");
 
     private void ShowAbout() => MessageBox.Query(App!, "About", $"SNMP MibBrowser (terminal) {GetType().Assembly.GetName().Version}\n\nOpen source, MIT license.\nSNMP: SharpSnmpLib (MIT). UI: Terminal.Gui (MIT).\n\nSettings: {_store.FilePath}", "OK");
