@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.7 build17
+
+- Resources tab: CPU, memory, disk, load and sensor values from HOST-RESOURCES, UCD-SNMP and ENTITY-SENSOR, with the OID that holds each value.
+- Monitor window: watch OIDs over time with a graph per item; counters are shown as a per-second rate. "Add to monitor" in Results, WALK compare, Resources and the MIB tree.
+- Fix: the LLDP tab failed on devices running longer than about 248 days.
+- Fix: WALK table showed empty values for OIDs without a MIB name.
+- Fix: an unreadable settings.json is kept as settings.json.bak instead of being overwritten; settings are saved atomically.
+- Fix: identical Results rows were selected together; copying very large selections is fast again.
+- Fix: MIB tree "Copy OID", Cancel after MIB loading, target changes during multi-step queries, and non-increasing OIDs from faulty agents.
+
 ## 1.0.6 build16
 
 - WALK compare tab: walk the same OID 2-10 times at a fixed interval; rows whose value changed are highlighted, with a "Changed only" filter and a Change column.
