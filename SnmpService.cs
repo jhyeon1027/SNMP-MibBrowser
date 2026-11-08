@@ -10,6 +10,14 @@ public sealed class SnmpService
     // Community that last worked per host:port:version, so a long community list is probed only once per device.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _workingCommunity = new();
 
+    private static string CommunityKey(SnmpOptions o) => $"{o.Host}:{o.Port}:{o.Version}";
+
+    /// <summary>The v1/v2c community the device last answered with, or null for v3 / not known yet.</summary>
+    public string? CommunityUsed(SnmpOptions o) =>
+        o.Version == "v3" ? null
+        : o.Communities is { Count: > 1 } ? (_workingCommunity.TryGetValue(CommunityKey(o), out var c) ? c : null)
+        : o.Community;
+
     /// <summary>Raised (on a worker thread) when probing a community list finds the one the device accepts: host, community, position, count.</summary>
     public event Action<string, string, int, int>? CommunityAccepted;
 
@@ -70,7 +78,7 @@ public sealed class SnmpService
     private IList<Variable> Send(SnmpOptions o, string oid, string operation, CancellationToken ct)
     {
         if (o.Version == "v3" || o.Communities is not { Count: > 1 } communities) return SendWithRetries(o, oid, operation);
-        var key = $"{o.Host}:{o.Port}:{o.Version}";
+        var key = CommunityKey(o);
         if (_workingCommunity.TryGetValue(key, out var known) && communities.Contains(known))
         {
             try { return SendWithRetries(o with { Community = known }, oid, operation); }
@@ -133,7 +141,11 @@ public sealed class SnmpService
             "NEXT" => new GetNextRequestMessage(VersionCode.V3, Messenger.NextMessageId, Messenger.NextRequestId, new OctetString(o.User), new OctetString(o.Context), vars, privacy, Messenger.MaxMessageSize, report),
             _ => new GetRequestMessage(VersionCode.V3, Messenger.NextMessageId, Messenger.NextRequestId, new OctetString(o.User), new OctetString(o.Context), vars, privacy, Messenger.MaxMessageSize, report)
         };
-        return request.GetResponse(o.Timeout, endpoint).Variables();
+        var response = request.GetResponse(o.Timeout, endpoint);
+        // An agent that rejects the request (wrong user, password, algorithm, ...) answers with a
+        // REPORT PDU whose variable is a usmStats counter. That must not be shown as the value.
+        if (response.Pdu().TypeCode == SnmpType.ReportPdu) throw new SnmpV3ReportException(response.Variables());
+        return response.Variables();
     }
 
     private static IPrivacyProvider BuildPrivacy(SnmpOptions o)
@@ -175,4 +187,23 @@ public sealed class SnmpService
         "Counter32" => new Counter32(uint.Parse(value)), "TimeTicks" => new TimeTicks(uint.Parse(value)),
         "IpAddress" => new IP(value), "ObjectIdentifier" => new ObjectIdentifier(Normalize(value)), _ => new OctetString(value)
     };
+}
+
+/// <summary>SNMPv3 request rejected by the agent; the message names the usmStats reason.</summary>
+public sealed class SnmpV3ReportException(IList<Variable> report) : Exception(Describe(report))
+{
+    private static string Describe(IList<Variable> report)
+    {
+        var oid = report.Count > 0 ? report[0].Id.ToString() : "";
+        return oid switch
+        {
+            "1.3.6.1.6.3.15.1.1.1.0" => "SNMPv3: security level not supported by the agent (check the Auth/Privacy settings).",
+            "1.3.6.1.6.3.15.1.1.2.0" => "SNMPv3: message outside the agent's time window.",
+            "1.3.6.1.6.3.15.1.1.3.0" => "SNMPv3: unknown user name.",
+            "1.3.6.1.6.3.15.1.1.4.0" => "SNMPv3: unknown engine ID.",
+            "1.3.6.1.6.3.15.1.1.5.0" => "SNMPv3: wrong authentication password or algorithm.",
+            "1.3.6.1.6.3.15.1.1.6.0" => "SNMPv3: decryption failed (wrong privacy password or algorithm).",
+            _ => $"SNMPv3: request rejected by the agent (report {oid})."
+        };
+    }
 }

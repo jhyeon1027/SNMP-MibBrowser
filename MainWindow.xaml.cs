@@ -28,6 +28,9 @@ public partial class MainWindow : Window
     // Targets that answered, most recent first (kept across sessions in settings.json).
     private List<string> _recentTargets = [];
     private const int MaxRecentTargets = 20;
+    // WALK compare tab: one row per OID, values per round.
+    private readonly ObservableCollection<CompareRow> _compareRows = [];
+    private readonly Dictionary<string, CompareRow> _compareIndex = [];
     private UserSettings _settings = new();
     private readonly string _settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SNMP-MibBrowser", "settings.json");
 
@@ -38,6 +41,9 @@ public partial class MainWindow : Window
         _snmp.CommunityAccepted += (host, community, index, total) => Dispatcher.Invoke(() =>
             Log(Tr($"{host}: Community \"{community}\" akzeptiert (Versuch {index}/{total}).", $"{host}: community \"{community}\" accepted (attempt {index}/{total}).")));
         ResultsGrid.ItemsSource = _results;
+        CompareGrid.ItemsSource = _compareRows;
+        WalkCompareTab.GotFocus += (_, _) => { if (CompareOidBox.Text.Length == 0) CompareOidBox.Text = QueryOidBox.Text.Trim(); };
+        for (var n = 2; n <= 10; n++) CompareRoundsBox.Items.Add(new ComboBoxItem { Content = n.ToString(), IsSelected = n == 3 });
         LoadSettings();
         _recentTargets = [.. _settings.RecentTargets.Take(MaxRecentTargets)];
         RefreshProfiles();
@@ -511,7 +517,7 @@ public partial class MainWindow : Window
     }
 
     // OctetStrings that are not clean UTF-8 text (MAC addresses, binary IDs) are shown as hex.
-    private static string DisplayValue(ISnmpData data)
+    internal static string DisplayValue(ISnmpData data)
     {
         if (data is not OctetString octets) return data.ToString();
         var bytes = octets.GetRaw();
@@ -615,6 +621,130 @@ public partial class MainWindow : Window
     }
     private static string Shorten(string value) => value.Length > 60 ? value[..60] + "…" : value;
 
+    // ---- WALK compare: walk the same OID several times and highlight rows whose value changed.
+    private async void CompareStart_Click(object sender, RoutedEventArgs e)
+    {
+        if (RejectWhileBusy()) return;
+        var oid = CompareOidBox.Text.Trim().TrimStart('.');
+        if (oid.Length == 0) { oid = QueryOidBox.Text.Trim().TrimStart('.'); CompareOidBox.Text = oid; }
+        if (!IsNumericOid(oid) || !oid.Split('.').All(part => uint.TryParse(part, out _)))
+        {
+            CompareStatusText.Text = StatusText.Text = Tr($"Ungültige OID: \"{oid}\"", $"Invalid OID: \"{oid}\"");
+            return;
+        }
+        var depthText = CompareDepthBox.Text.Trim();
+        var depth = 0;
+        if (depthText.Length > 0 && (!int.TryParse(depthText, out depth) || depth < 0))
+        {
+            CompareStatusText.Text = StatusText.Text = Tr("Ungültige Tiefe (Zahl ≥ 0).", "Invalid depth (number ≥ 0).");
+            return;
+        }
+        var rounds = int.Parse(((ComboBoxItem)CompareRoundsBox.SelectedItem).Content.ToString()!);
+        var interval = int.Parse(((ComboBoxItem)CompareIntervalBox.SelectedItem).Tag.ToString()!);
+        // 1.3.6.1.4.1 and shorter cover every vendor; suggest narrowing to the vendor subtree.
+        if (oid.Split('.').Length <= 7 && depth == 0 &&
+            MessageBox.Show(Tr($"WALK von {oid} kann sehr viele Objekte liefern und lange dauern. Besser auf den Herstellerzweig (z. B. 1.3.6.1.4.1.<Nummer>) eingrenzen. Trotzdem starten?",
+                                $"Walking {oid} can return a very large number of objects and take a long time. Narrowing it to the vendor subtree (e.g. 1.3.6.1.4.1.<number>) is recommended. Start anyway?"),
+                Tr("WALK-Vergleich", "WALK compare"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+
+        _compareRows.Clear(); _compareIndex.Clear();
+        BuildCompareColumns(rounds);
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        SetBusy(true, Tr("WALK-Vergleich läuft…", "WALK compare running…"));
+        CompareStartButton.IsEnabled = false; CompareStopButton.IsEnabled = true;
+        var host = HostBox.Text.Trim();
+        var completed = 0;
+        Log(Tr($"WALK-Vergleich gestartet: {oid}, {rounds} Runden, alle {interval} s.", $"WALK compare started: {oid}, {rounds} rounds, every {interval} s."));
+        try
+        {
+            for (var round = 0; round < rounds; round++)
+            {
+                if (round > 0)
+                    for (var remaining = interval; remaining > 0; remaining--)
+                    {
+                        CompareStatusText.Text = Tr($"Runde {round + 1}/{rounds} — nächste in {remaining} s", $"Round {round + 1}/{rounds} — next in {remaining} s");
+                        await Task.Delay(1000, ct);
+                    }
+                CompareStatusText.Text = Tr($"Runde {round + 1}/{rounds} — WALK läuft…", $"Round {round + 1}/{rounds} — walking…");
+                var answer = await _snmp.WalkAsync(Options(), oid, ct, depth, () => Dispatcher.Invoke(() => LogWalkLimit(oid)));
+                foreach (var v in answer)
+                {
+                    var id = v.Id.ToString();
+                    if (!_compareIndex.TryGetValue(id, out var row))
+                    {
+                        row = new CompareRow(id, ResolveNode(id)?.Name ?? "", v.Data.TypeCode.ToString(), rounds);
+                        _compareIndex[id] = row; _compareRows.Add(row);
+                    }
+                    row.Values[round] = DisplayValue(v.Data);
+                }
+                completed = round + 1;
+                foreach (var row in _compareRows) row.Evaluate(completed);
+                RefreshCompareFilter();
+                RememberTarget(host);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ShowError(Tr("WALK-Vergleich fehlgeschlagen", "WALK compare failed"), ex); }
+        finally
+        {
+            _cts?.Dispose(); _cts = null;
+            CompareStartButton.IsEnabled = true; CompareStopButton.IsEnabled = false;
+            var changed = _compareRows.Count(r => r.Changed);
+            var summary = Tr($"{completed}/{rounds} Runden, {_compareRows.Count} OIDs, {changed} geändert", $"{completed}/{rounds} rounds, {_compareRows.Count} OIDs, {changed} changed");
+            CompareStatusText.Text = summary;
+            Log($"WALK compare {oid}: {summary}.");
+            SetBusy(false, summary);
+        }
+    }
+
+    private void BuildCompareColumns(int rounds)
+    {
+        CompareGrid.Columns.Clear();
+        CompareGrid.Columns.Add(new DataGridTextColumn { Header = "OID", Binding = new System.Windows.Data.Binding(nameof(CompareRow.Oid)), Width = 220, MinWidth = 160 });
+        CompareGrid.Columns.Add(new DataGridTextColumn { Header = "Name", Binding = new System.Windows.Data.Binding(nameof(CompareRow.Name)), Width = 140, MinWidth = 90 });
+        CompareGrid.Columns.Add(new DataGridTextColumn { Header = Tr("Typ", "Type"), Binding = new System.Windows.Data.Binding(nameof(CompareRow.Type)), Width = 95, MinWidth = 80 });
+        for (var r = 0; r < rounds; r++)
+            CompareGrid.Columns.Add(new DataGridTextColumn { Header = $"#{r + 1}", Binding = new System.Windows.Data.Binding($"Values[{r}]"), Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 80 });
+        CompareGrid.Columns.Add(new DataGridTextColumn { Header = Tr("Änderung", "Change"), Binding = new System.Windows.Data.Binding(nameof(CompareRow.Change)), Width = 90, MinWidth = 70 });
+    }
+
+    private void CompareChangedOnly_Click(object sender, RoutedEventArgs e) => RefreshCompareFilter();
+    private void RefreshCompareFilter()
+    {
+        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(_compareRows);
+        view.Filter = CompareChangedOnlyBox.IsChecked == true ? item => ((CompareRow)item).Changed : null;
+    }
+
+    private List<CompareRow> SelectedCompareRows() => _compareRows.Where(CompareGrid.SelectedItems.Contains).ToList();
+    private void CompareCopyOid_Click(object sender, RoutedEventArgs e)
+    {
+        var rows = SelectedCompareRows();
+        CopyToClipboard(string.Join(Environment.NewLine, rows.Select(r => r.Oid)), rows.Count);
+    }
+    private void CompareCopyRows_Click(object sender, RoutedEventArgs e) => CopyCompareRowsWithHeader();
+    private void CopyCompareRowsWithHeader()
+    {
+        var rows = SelectedCompareRows();
+        if (rows.Count == 0) return;
+        var header = string.Join("\t", CompareGrid.Columns.Select(col => col.Header?.ToString() ?? ""));
+        CopyToClipboard(header + Environment.NewLine + string.Join(Environment.NewLine, rows.Select(r => string.Join("\t", new[] { r.Oid, r.Name, r.Type }.Concat(r.Values).Append(r.Change?.ToString() ?? "")))), rows.Count);
+    }
+    private void CompareGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.C || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0) return;
+        e.Handled = true; CopyCompareRowsWithHeader();
+    }
+    // Double-click copies the OID: the goal of this tab is finding the OID to use.
+    private void CompareGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        DependencyObject? current = e.OriginalSource as DependencyObject;
+        while (current != null && current is not DataGridRow) current = VisualTreeHelper.GetParent(current);
+        if (current is not DataGridRow { Item: CompareRow row }) return;
+        if (CopyToClipboard(row.Oid, 1)) StatusText.Text = Tr($"OID kopiert: {row.Oid}", $"OID copied: {row.Oid}");
+        e.Handled = true;
+    }
+
     private void PopulateWalkTable(IList<Variable> variables)
     {
         var cells = new List<(string Index,string Column,string Value)>();
@@ -636,6 +766,20 @@ public partial class MainWindow : Window
     }
 
     private MibNode? ResolveNode(string oid) => _nodes.Where(n => oid == n.Oid || oid.StartsWith(n.Oid + ".", StringComparison.Ordinal)).OrderByDescending(n => n.Oid.Length).FirstOrDefault();
+    private MultiTargetWindow? _multiTargetWindow;
+    private void MultiTarget_Click(object sender, RoutedEventArgs e)
+    {
+        if (_multiTargetWindow is { IsLoaded: true }) { _multiTargetWindow.Activate(); return; }
+        _multiTargetWindow = new MultiTargetWindow(_snmp, host => Options() with { Host = host }, SetTargetFromMultiTarget, _language) { Owner = this };
+        _multiTargetWindow.Show();
+    }
+    private void SetTargetFromMultiTarget(string host)
+    {
+        ToolbarHostBox.Text = host;
+        Activate();
+        StatusText.Text = Tr($"Ziel gesetzt: {host}", $"Target set: {host}");
+    }
+
     private SnmpOptions Options()
     {
         _ = int.TryParse(PortBox.Text, out var port);
@@ -790,7 +934,7 @@ public partial class MainWindow : Window
         SetBrush("WindowBrush", _dark ? "#171922" : "#F2F5F9"); SetBrush("SurfaceBrush", _dark ? "#222530" : "#FFFFFF");
         SetBrush("SurfaceAltBrush", _dark ? "#2B2F3C" : "#F7F9FC"); SetBrush("TextBrush", _dark ? "#F2F3F7" : "#172033");
         SetBrush("SubtleTextBrush", _dark ? "#AEB5C5" : "#68758A"); SetBrush("BorderBrush", _dark ? "#3A3F4E" : "#DDE3EC");
-        SetBrush("InputBrush", _dark ? "#1D2029" : "#FFFFFF"); SetBrush("SelectionBrush", _dark ? "#493667" : "#E9DFF7");
+        SetBrush("InputBrush", _dark ? "#1D2029" : "#FFFFFF"); SetBrush("CompareChangedBrush", _dark ? "#5C2A44" : "#FFD6E5"); SetBrush("SelectionBrush", _dark ? "#493667" : "#E9DFF7");
         Application.Current.Resources[SystemColors.WindowBrushKey] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_dark ? "#222530" : "#FFFFFF"));
         Application.Current.Resources[SystemColors.WindowTextBrushKey] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_dark ? "#F2F3F7" : "#172033"));
         Application.Current.Resources[SystemColors.ControlBrushKey] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(_dark ? "#2B2F3C" : "#F7F9FC"));
@@ -822,6 +966,11 @@ public partial class MainWindow : Window
         SearchBox.ToolTip = de ? "Nach Name, OID oder Beschreibung suchen" : "Search by name, OID or description";
         WalkDepthLabel.Text = de ? "Tiefe" : "Depth"; WalkDepthBox.ToolTip = de ? "Maximale WALK-Tiefe unterhalb der OID (0 = unbegrenzt)" : "Maximum WALK depth below the OID (0 = unlimited)";
         UpdateCommunityListButton();
+        MultiTargetButton.Content = de ? "▦  Mehrere Ziele" : "▦  Multi-target"; MultiTargetButton.ToolTip = de ? "Viele Ziele gleichzeitig abfragen" : "Query many targets at once";
+        WalkCompareTab.Header = de ? "WALK-Vergleich" : "WALK compare"; CompareIntervalLabel.Text = de ? "Intervall" : "Interval"; CompareRoundsLabel.Text = de ? "Runden" : "Rounds";
+        CompareDepthLabel.Text = de ? "Tiefe" : "Depth"; CompareStartButton.Content = de ? "▶  Start" : "▶  Start"; CompareStopButton.Content = de ? "■  Stopp" : "■  Stop";
+        CompareChangedOnlyBox.Content = de ? "Nur geänderte" : "Changed only"; CompareCopyOidItem.Header = de ? "OID kopieren" : "Copy OID"; CompareCopyRowsItem.Header = de ? "Zeilen kopieren (Excel)" : "Copy rows (Excel)";
+        CompareOidBox.ToolTip = de ? "Leer lassen, um die OID aus der Symbolleiste zu verwenden" : "Leave empty to use the toolbar OID";
         RecentTargetsButton.ToolTip = de ? "Zuletzt verwendete Ziele (↓)" : "Recent targets (↓)";
         CopyValueItem.Header = de ? "Wert kopieren" : "Copy value"; CopyOidItem.Header = de ? "OID kopieren" : "Copy OID";
         CopyOidValueItem.Header = de ? "OID = Wert kopieren" : "Copy OID = value"; CopyRowsItem.Header = de ? "Zeilen kopieren (Excel)" : "Copy rows (Excel)";

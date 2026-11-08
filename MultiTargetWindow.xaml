@@ -1,0 +1,35 @@
+<Window x:Class="SnmpMibBrowser.MultiTargetWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Multi-target query" Width="1050" Height="700" MinWidth="720" MinHeight="480" WindowStartupLocation="CenterOwner" Background="{DynamicResource WindowBrush}">
+ <Grid Margin="12" TextElement.Foreground="{DynamicResource TextBrush}"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <DockPanel Margin="0,0,8,0">
+    <TextBlock x:Name="TargetsLabel" DockPanel.Dock="Top" Text="Targets (one per line, ranges like 10.1.1.10-20)" Foreground="{DynamicResource SubtleTextBrush}" Margin="4,0" TextWrapping="Wrap"/>
+    <TextBlock x:Name="TargetCountText" DockPanel.Dock="Bottom" Foreground="{DynamicResource SubtleTextBrush}" Margin="4,0"/>
+    <TextBox x:Name="TargetsBox" Height="160" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Consolas" TextChanged="TargetsBox_TextChanged"/>
+   </DockPanel>
+   <StackPanel Grid.Column="1">
+    <TextBlock x:Name="OidsLabel" Text="OIDs to GET" Foreground="{DynamicResource SubtleTextBrush}" Margin="4,0"/>
+    <WrapPanel x:Name="PresetPanel" Margin="0,2"/>
+    <TextBlock x:Name="CustomLabel" Text="Custom OIDs (one per line)" Foreground="{DynamicResource SubtleTextBrush}" Margin="4,4,4,0"/>
+    <TextBox x:Name="CustomOidsBox" Height="62" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" FontFamily="Consolas"/>
+    <WrapPanel Margin="0,2">
+     <TextBlock x:Name="VersionLabel" Text="Version" VerticalAlignment="Center" Margin="4,0,2,0"/><ComboBox x:Name="VersionBox" Width="70" SelectionChanged="VersionBox_SelectionChanged"><ComboBoxItem>v1</ComboBoxItem><ComboBoxItem>v2c</ComboBoxItem><ComboBoxItem>v3</ComboBoxItem></ComboBox>
+     <TextBlock x:Name="CommunityLabel" Text="Community" VerticalAlignment="Center" Margin="8,0,2,0"/><TextBox x:Name="CommunityBox" Width="200" VerticalContentAlignment="Center" TextChanged="CommunityBox_TextChanged"/><Button x:Name="CommunityListButton" Content="☰  List (1)" Click="CommunityList_Click"/>
+    </WrapPanel>
+    <TextBlock x:Name="SummaryText" Foreground="{DynamicResource SubtleTextBrush}" Margin="4,2" TextWrapping="Wrap"/>
+   </StackPanel>
+  </Grid>
+  <WrapPanel Grid.Row="1">
+   <Button x:Name="RunButton" Style="{StaticResource AccentButton}" Content="▶  Run" Click="Run_Click"/><Button x:Name="StopButton" Content="■  Stop" IsEnabled="False" Click="Stop_Click"/><Button x:Name="ClearButton" Content="⌫  Clear" ToolTip="Clear the results (targets and OIDs are kept)" Click="Clear_Click"/>
+   <CheckBox x:Name="FailedOnlyBox" Content="Failed only" VerticalAlignment="Center" Margin="8,0" Foreground="{DynamicResource TextBrush}" Checked="FailedOnly_Changed" Unchecked="FailedOnly_Changed"/>
+   <ProgressBar x:Name="RunProgress" Width="140" Height="10" Margin="8,0" VerticalAlignment="Center" Visibility="Collapsed"/>
+   <TextBlock x:Name="ProgressText" VerticalAlignment="Center" Margin="4,0" Foreground="{DynamicResource SubtleTextBrush}"/>
+  </WrapPanel>
+  <DataGrid x:Name="ResultGrid" Grid.Row="2" Margin="0,6,0,0" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" GridLinesVisibility="Horizontal" SelectionMode="Extended" PreviewKeyDown="ResultGrid_PreviewKeyDown" MouseDoubleClick="ResultGrid_MouseDoubleClick">
+   <DataGrid.RowStyle><Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}"><Style.Triggers>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding Failed}" Value="True"/><Condition Binding="{Binding IsSelected, RelativeSource={RelativeSource Self}}" Value="False"/></MultiDataTrigger.Conditions><Setter Property="Background" Value="{DynamicResource CompareChangedBrush}"/></MultiDataTrigger>
+   </Style.Triggers></Style></DataGrid.RowStyle>
+   <DataGrid.ContextMenu><ContextMenu><MenuItem x:Name="CopyTargetsItem" Header="Copy targets" Click="CopyTargets_Click"/><MenuItem x:Name="CopyRowsItem" Header="Copy rows (Excel)" InputGestureText="Ctrl+C" Click="CopyRows_Click"/><Separator/><MenuItem x:Name="OpenInMainItem" Header="Use as target in main window" Click="OpenInMain_Click"/></ContextMenu></DataGrid.ContextMenu>
+  </DataGrid>
+ </Grid>
+</Window>

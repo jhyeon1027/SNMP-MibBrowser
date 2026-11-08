@@ -59,3 +59,47 @@ public sealed class UserSettings
 }
 
 public sealed record GitHubRelease(string Tag, string Name, string Notes, bool Prerelease, string PageUrl, string AssetUrl, string AssetName, string Digest);
+
+// One OID in the WALK compare tab: its value per round and whether any round differs.
+public sealed class CompareRow(string oid, string name, string type, int rounds) : System.ComponentModel.INotifyPropertyChanged
+{
+    public string Oid { get; } = oid;
+    public string Name { get; } = name;
+    public string Type { get; set; } = type;
+    public ObservableCollection<string> Values { get; } = new(Enumerable.Repeat("", rounds));
+    public bool Changed { get; private set; }
+    public long? Change { get; private set; }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    // Compares only the rounds completed so far; a missing value ("") counts as a difference.
+    public void Evaluate(int completedRounds)
+    {
+        var seen = Values.Take(completedRounds).ToList();
+        Changed = seen.Distinct(StringComparer.Ordinal).Count() > 1;
+        var numbers = seen.Select(v => long.TryParse(v, out var n) ? n : (long?)null).Where(n => n.HasValue).Select(n => n!.Value).ToList();
+        Change = numbers.Count >= 2 && numbers.Count == seen.Count ? numbers.Max() - numbers.Min() : null;
+        PropertyChanged?.Invoke(this, new(nameof(Changed)));
+        PropertyChanged?.Invoke(this, new(nameof(Change)));
+        PropertyChanged?.Invoke(this, new(nameof(Type)));
+    }
+}
+
+// One target in the multi-target window.
+public sealed class MultiTargetRow(string target, int oidCount) : System.ComponentModel.INotifyPropertyChanged
+{
+    public string Target { get; } = target;
+    public string Status { get; private set; } = "";
+    public string Community { get; private set; } = "";
+    public string Duration { get; private set; } = "";
+    public bool Failed { get; private set; }
+    public ObservableCollection<string> Values { get; } = new(Enumerable.Repeat("", oidCount));
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    public void SetResult(string status, bool failed, string community, string duration)
+    {
+        Status = status; Failed = failed; Community = community; Duration = duration;
+        foreach (var name in new[] { nameof(Status), nameof(Failed), nameof(Community), nameof(Duration) }) PropertyChanged?.Invoke(this, new(name));
+    }
+}

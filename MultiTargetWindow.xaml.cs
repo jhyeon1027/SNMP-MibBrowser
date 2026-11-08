@@ -1,0 +1,263 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Interop;
+using System.Windows.Media;
+using Lextm.SharpSnmpLib.Messaging;
+
+namespace SnmpMibBrowser;
+
+// GETs the same OIDs from many targets in parallel, using the SNMP settings of the main window.
+public partial class MultiTargetWindow : Window
+{
+    private const int MaxParallel = 10;
+    private const int MaxTargets = 2000;
+    private static readonly (string Name, string Oid, bool Checked)[] Presets =
+    [
+        ("sysName", "1.3.6.1.2.1.1.5.0", true), ("sysDescr", "1.3.6.1.2.1.1.1.0", true), ("sysUpTime", "1.3.6.1.2.1.1.3.0", false),
+        ("sysObjectID", "1.3.6.1.2.1.1.2.0", false), ("sysLocation", "1.3.6.1.2.1.1.6.0", false), ("sysContact", "1.3.6.1.2.1.1.4.0", false)
+    ];
+    private static readonly Regex RangeRx = new(@"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$", RegexOptions.Compiled);
+
+    private readonly SnmpService _snmp;
+    private readonly Func<string, SnmpOptions> _optionsFor;
+    private List<string> _communities = ["public"];
+    private readonly Action<string> _setMainTarget;
+    private readonly bool _de;
+    private readonly ObservableCollection<MultiTargetRow> _rows = [];
+    private CancellationTokenSource? _cts;
+
+    public MultiTargetWindow(SnmpService snmp, Func<string, SnmpOptions> optionsFor, Action<string> setMainTarget, string language)
+    {
+        InitializeComponent();
+        _snmp = snmp; _optionsFor = optionsFor; _setMainTarget = setMainTarget; _de = language == "de";
+        foreach (var (name, oid, isChecked) in Presets)
+            PresetPanel.Children.Add(new CheckBox { Content = name, Tag = oid, IsChecked = isChecked, ToolTip = oid, Margin = new Thickness(4, 2, 10, 2), Foreground = (Brush)FindResource("TextBrush") });
+        ResultGrid.ItemsSource = _rows;
+        // Version and communities start from the main window and can be changed here.
+        var main = _optionsFor("");
+        _communities = main.Communities is { Count: > 0 } list ? [.. list] : [main.Community];
+        CommunityBox.Text = _communities[0];
+        VersionBox.SelectedItem = VersionBox.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Content == main.Version) ?? VersionBox.Items[1];
+        Localize();
+        TargetsBox_TextChanged(this, null!);
+        // The main-window settings can change while this window is open.
+        Activated += (_, _) => UpdateSummary();
+        Closing += (_, _) => _cts?.Cancel();
+    }
+
+    private string Tr(string de, string en) => _de ? de : en;
+
+    private string SelectedVersion => (VersionBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "v2c";
+    private SnmpOptions OptionsFor(string host)
+    {
+        var communities = _communities.Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToList();
+        return _optionsFor(host) with { Version = SelectedVersion, Community = communities.FirstOrDefault() ?? "", Communities = communities };
+    }
+    // Port, timeout, retries and the v3 credentials always come from the main window.
+    private void UpdateSummary()
+    {
+        if (!IsInitialized) return;
+        var o = _optionsFor("");
+        var v3 = SelectedVersion == "v3" ? $" · v3 user {o.User} ({o.AuthType}/{o.PrivacyType})" : "";
+        SummaryText.Text = Tr("Aus dem Hauptfenster: ", "From the main window: ") + $"port {o.Port} · timeout {o.Timeout} ms · retries {o.Retries}{v3}";
+    }
+    private void VersionBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        var v3 = SelectedVersion == "v3";
+        CommunityLabel.Visibility = CommunityBox.Visibility = CommunityListButton.Visibility = v3 ? Visibility.Collapsed : Visibility.Visible;
+        UpdateSummary();
+    }
+    private void CommunityBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsInitialized) return;
+        if (_communities.Count == 0) _communities.Add(CommunityBox.Text); else _communities[0] = CommunityBox.Text;
+        UpdateCommunityButton();
+    }
+    private void CommunityList_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new CommunityListWindow(_communities.Where(x => x.Length > 0), _de ? "de" : "en") { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        _communities = dialog.Result.Count > 0 ? dialog.Result : [""];
+        CommunityBox.Text = _communities[0];
+        UpdateCommunityButton();
+    }
+    private void UpdateCommunityButton() =>
+        CommunityListButton.Content = Tr($"☰  Liste ({_communities.Count(x => x.Length > 0)})", $"☰  List ({_communities.Count(x => x.Length > 0)})");
+
+    public static List<string> ParseTargets(string text)
+    {
+        var targets = new List<string>();
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            var m = RangeRx.Match(line);
+            if (m.Success && int.TryParse(m.Groups[2].Value, out var from) && int.TryParse(m.Groups[3].Value, out var to) && from <= to && to <= 255)
+                for (var n = from; n <= to; n++) targets.Add(m.Groups[1].Value + n);
+            else targets.Add(line);
+        }
+        return targets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private void TargetsBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        TargetCountText.Text = Tr($"{ParseTargets(TargetsBox.Text).Count} Ziele", $"{ParseTargets(TargetsBox.Text).Count} targets");
+
+    private List<(string Header, string Oid)>? ReadOids()
+    {
+        var oids = PresetPanel.Children.OfType<CheckBox>().Where(c => c.IsChecked == true).Select(c => (c.Content.ToString()!, c.Tag.ToString()!)).ToList();
+        foreach (var raw in CustomOidsBox.Text.Split('\n'))
+        {
+            var oid = raw.Trim().TrimStart('.');
+            if (oid.Length == 0) continue;
+            if (!oid.Split('.').All(part => part.Length > 0 && uint.TryParse(part, out _)))
+            {
+                ProgressText.Text = Tr($"Ungültige OID: {oid}", $"Invalid OID: {oid}");
+                return null;
+            }
+            oids.Add((oid, oid));
+        }
+        return oids.DistinctBy(x => x.Item2).ToList();
+    }
+
+    private async void Run_Click(object sender, RoutedEventArgs e)
+    {
+        var targets = ParseTargets(TargetsBox.Text);
+        var oids = ReadOids();
+        if (oids == null) return;
+        if (targets.Count == 0 || oids.Count == 0) { ProgressText.Text = Tr("Bitte Ziele und mindestens eine OID angeben.", "Enter targets and at least one OID."); return; }
+        if (targets.Count > MaxTargets) { ProgressText.Text = Tr($"Höchstens {MaxTargets} Ziele.", $"At most {MaxTargets} targets."); return; }
+
+        BuildColumns(oids);
+        _rows.Clear();
+        foreach (var target in targets) _rows.Add(new MultiTargetRow(target, oids.Count));
+        UpdateSummary();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        RunButton.IsEnabled = false; StopButton.IsEnabled = true; ClearButton.IsEnabled = false;
+        RunProgress.Visibility = Visibility.Visible; RunProgress.Maximum = targets.Count; RunProgress.Value = 0;
+        var done = 0;
+        var gate = new SemaphoreSlim(MaxParallel);
+        async Task RunOne(MultiTargetRow row)
+        {
+            await gate.WaitAsync(ct);
+            try { await QueryAsync(row, oids, ct); }
+            finally
+            {
+                gate.Release();
+                done++; RunProgress.Value = done;
+                ProgressText.Text = Tr($"{done}/{targets.Count} erledigt", $"{done}/{targets.Count} done");
+            }
+        }
+        try { await Task.WhenAll(_rows.ToList().Select(RunOne)); }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            foreach (var row in _rows.Where(r => r.Status.Length == 0)) row.SetResult(Tr("Abgebrochen", "Cancelled"), true, "", "");
+            _cts.Dispose(); _cts = null;
+            RunButton.IsEnabled = true; StopButton.IsEnabled = false; ClearButton.IsEnabled = true; RunProgress.Visibility = Visibility.Collapsed;
+            var failed = _rows.Count(r => r.Failed);
+            ProgressText.Text = Tr($"{_rows.Count - failed} OK, {failed} fehlgeschlagen", $"{_rows.Count - failed} OK, {failed} failed");
+            RefreshFilter();
+        }
+    }
+
+    private async Task QueryAsync(MultiTargetRow row, List<(string Header, string Oid)> oids, CancellationToken ct)
+    {
+        var options = OptionsFor(row.Target);
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            // One GET per OID: a single unknown OID then only affects its own column (SNMPv1 fails the whole request otherwise).
+            // The first GET finds the community; later ones reuse it from the service cache.
+            for (var i = 0; i < oids.Count; i++)
+            {
+                try
+                {
+                    var answer = await _snmp.GetAsync(options, oids[i].Oid, false, ct);
+                    row.Values[i] = answer.Count > 0 ? MainWindow.DisplayValue(answer[0].Data) : "";
+                }
+                catch (ErrorException ex) { row.Values[i] = "error " + (ex.Body?.Pdu().ErrorStatus.ToInt32() is 2 ? "noSuchName" : ex.Body?.Pdu().ErrorStatus.ToString()); }
+            }
+            row.SetResult("OK", false, _snmp.CommunityUsed(options) ?? "", $"{sw.ElapsedMilliseconds} ms");
+        }
+        catch (OperationCanceledException) { row.SetResult(Tr("Abgebrochen", "Cancelled"), true, "", ""); throw; }
+        catch (Lextm.SharpSnmpLib.Messaging.TimeoutException) { row.SetResult("Timeout", true, "", ""); }
+        catch (System.TimeoutException) { row.SetResult("Timeout", true, "", ""); }
+        // ICMP "port unreachable": the host is up but nothing listens on the SNMP port.
+        catch (System.Net.Sockets.SocketException ex) when (ex.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset) { row.SetResult(Tr("Port geschlossen", "Port closed"), true, "", ""); }
+        catch (Exception ex) { row.SetResult(Tr("Fehler: ", "Error: ") + ex.Message, true, "", ""); }
+    }
+
+    private void BuildColumns(List<(string Header, string Oid)> oids)
+    {
+        ResultGrid.Columns.Clear();
+        ResultGrid.Columns.Add(new DataGridTextColumn { Header = Tr("Ziel", "Target"), Binding = new Binding(nameof(MultiTargetRow.Target)), Width = 120, MinWidth = 100 });
+        ResultGrid.Columns.Add(new DataGridTextColumn { Header = "Status", Binding = new Binding(nameof(MultiTargetRow.Status)), Width = 90, MinWidth = 70 });
+        ResultGrid.Columns.Add(new DataGridTextColumn { Header = "Community", Binding = new Binding(nameof(MultiTargetRow.Community)), Width = 100, MinWidth = 80 });
+        ResultGrid.Columns.Add(new DataGridTextColumn { Header = Tr("Dauer", "Duration"), Binding = new Binding(nameof(MultiTargetRow.Duration)), Width = 75, MinWidth = 65 });
+        for (var i = 0; i < oids.Count; i++)
+            ResultGrid.Columns.Add(new DataGridTextColumn { Header = oids[i].Header, Binding = new Binding($"Values[{i}]"), Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 120 });
+    }
+
+    private void Stop_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
+    // Clears the result table only; targets, OIDs and communities stay for the next run.
+    private void Clear_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cts != null) return;
+        _rows.Clear(); ResultGrid.Columns.Clear(); ProgressText.Text = "";
+    }
+    private void FailedOnly_Changed(object sender, RoutedEventArgs e) => RefreshFilter();
+    private void RefreshFilter() =>
+        CollectionViewSource.GetDefaultView(_rows).Filter = FailedOnlyBox.IsChecked == true ? item => ((MultiTargetRow)item).Failed : null;
+
+    // ---- copy and hand-over to the main window
+    private List<MultiTargetRow> SelectedRows() => _rows.Where(ResultGrid.SelectedItems.Contains).ToList();
+    private void Copy(string text, int count)
+    {
+        if (text.Length == 0) return;
+        ProgressText.Text = ClipboardText.TrySet(new WindowInteropHelper(this).Handle, text)
+            ? Tr($"{count} Zeile(n) kopiert", $"Copied {count} row(s)")
+            : Tr("Zwischenablage ist belegt. Bitte erneut versuchen.", "The clipboard is busy. Please try again.");
+    }
+    private void CopyTargets_Click(object sender, RoutedEventArgs e) { var rows = SelectedRows(); Copy(string.Join(Environment.NewLine, rows.Select(r => r.Target)), rows.Count); }
+    private void CopyRows_Click(object sender, RoutedEventArgs e) => CopyRowsWithHeader();
+    private void CopyRowsWithHeader()
+    {
+        var rows = SelectedRows();
+        if (rows.Count == 0) return;
+        var header = string.Join("\t", ResultGrid.Columns.Select(c => c.Header?.ToString() ?? ""));
+        Copy(header + Environment.NewLine + string.Join(Environment.NewLine, rows.Select(r => string.Join("\t", new[] { r.Target, r.Status, r.Community, r.Duration }.Concat(r.Values)))), rows.Count);
+    }
+    private void ResultGrid_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.C || (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) == 0) return;
+        e.Handled = true; CopyRowsWithHeader();
+    }
+    private void ResultGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        DependencyObject? current = e.OriginalSource as DependencyObject;
+        while (current != null && current is not DataGridRow) current = VisualTreeHelper.GetParent(current);
+        if (current is not DataGridRow { Item: MultiTargetRow row }) return;
+        _setMainTarget(row.Target);
+        e.Handled = true;
+    }
+    private void OpenInMain_Click(object sender, RoutedEventArgs e) { if (SelectedRows().FirstOrDefault() is { } row) _setMainTarget(row.Target); }
+
+    private void Localize()
+    {
+        Title = Tr("Mehrere Ziele abfragen", "Multi-target query");
+        TargetsLabel.Text = Tr("Ziele (eine pro Zeile, Bereiche wie 10.1.1.10-20)", "Targets (one per line, ranges like 10.1.1.10-20)");
+        OidsLabel.Text = Tr("Abzufragende OIDs (GET)", "OIDs to GET"); CustomLabel.Text = Tr("Eigene OIDs (eine pro Zeile)", "Custom OIDs (one per line)");
+        RunButton.Content = Tr("▶  Starten", "▶  Run"); ClearButton.Content = Tr("⌫  Leeren", "⌫  Clear");
+        ClearButton.ToolTip = Tr("Ergebnisse löschen (Ziele und OIDs bleiben erhalten)", "Clear the results (targets and OIDs are kept)"); StopButton.Content = Tr("■  Stopp", "■  Stop"); FailedOnlyBox.Content = Tr("Nur fehlgeschlagene", "Failed only");
+        CopyTargetsItem.Header = Tr("Ziele kopieren", "Copy targets"); CopyRowsItem.Header = Tr("Zeilen kopieren (Excel)", "Copy rows (Excel)");
+        OpenInMainItem.Header = Tr("Als Ziel im Hauptfenster verwenden", "Use as target in main window");
+        VersionLabel.Text = "Version"; CommunityLabel.Text = "Community";
+        UpdateCommunityButton(); UpdateSummary();
+    }
+}
