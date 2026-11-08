@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Terminal (TUI) version for Linux servers without a desktop. Publish: dotnet publish -c Release -r linux-x64 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>SnmpMibBrowser.Tui</RootNamespace>
+    <AssemblyName>snmpmb</AssemblyName>
+    <Product>SNMP MibBrowser (terminal)</Product>
+    <Version>1.0.7</Version>
+    <AssemblyVersion>1.0.7.17</AssemblyVersion>
+    <FileVersion>1.0.7.17</FileVersion>
+    <!-- No libicu needed on the server. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Terminal.Gui" Version="2.5.0" />
+    <ProjectReference Include="..\Core\SnmpMibBrowser.Core.csproj" />
+  </ItemGroup>
+
+</Project>
