@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.6 build16
+
+- WALK compare tab: walk the same OID 2-10 times at a fixed interval; rows whose value changed are highlighted, with a "Changed only" filter and a Change column.
+- Multi-target window: GET system or custom OIDs from many targets (ranges like 10.1.1.10-20), 10 in parallel, with its own version and community list.
+- Multi-target failure reasons (No SNMP / host down / port closed / SNMPv3 errors), Re-run failed, numeric IP sorting and remembered inputs.
+- SNMPv3 rejections (unknown user, wrong password or algorithm, decryption error) are reported as errors instead of being shown as values.
+
 ## 1.0.5 build15
 
 - Remember the last 20 targets that answered; open the list with the button next to Target or the Down key.
