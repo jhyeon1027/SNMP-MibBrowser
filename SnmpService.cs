@@ -42,6 +42,8 @@ public sealed class SnmpService
             var answer = Send(o, current, "NEXT", ct);
             if (answer.Count == 0 || !answer[0].Id.ToString().StartsWith(oid + ".", StringComparison.Ordinal) || answer[0].Id.ToString() == current) { completed = true; break; }
             var id = answer[0].Id.ToString();
+            // GETNEXT must return a larger OID; a broken agent that does not would otherwise loop to MaxWalkSteps.
+            if (CompareOids(id, current) <= 0) { completed = true; break; }
             var arcs = id.Split('.');
             var prefix = maxDepth > 0 && arcs.Length - rootArcs > maxDepth ? string.Join('.', arcs.Take(rootArcs + maxDepth)) : null;
             if (prefix == null || prefix != skippedPrefix) results.Add(answer[0]);

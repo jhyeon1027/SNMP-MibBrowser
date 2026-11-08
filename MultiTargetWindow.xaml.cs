@@ -281,7 +281,11 @@ public partial class MultiTargetWindow : Window
         CollectionViewSource.GetDefaultView(_rows).Filter = FailedOnlyBox.IsChecked == true ? item => ((MultiTargetRow)item).Failed : null;
 
     // ---- copy and hand-over to the main window
-    private List<MultiTargetRow> SelectedRows() => _rows.Where(ResultGrid.SelectedItems.Contains).ToList();
+    private List<MultiTargetRow> SelectedRows()
+    {
+        var selected = new HashSet<object>(ResultGrid.SelectedItems.Cast<object>(), ReferenceEqualityComparer.Instance);
+        return _rows.Where(selected.Contains).ToList();
+    }
     private void Copy(string text, int count)
     {
         if (text.Length == 0) return;

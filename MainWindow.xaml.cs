@@ -165,7 +165,8 @@ public partial class MainWindow : Window
         ["1.0.8802"]="ieee", ["1.0.8802.1"]="standards", ["1.0.8802.1.1"]="ieee802dot1", ["1.0.8802.1.1.2"]="lldpMIB"
     };
 
-    private static string OidSortKey(string oid) => string.Join('.', oid.Split('.').Select(x => int.Parse(x).ToString("D10")));
+    // Arcs are unsigned 32-bit (TimeTicks indexes such as lldpRemTimeMark exceed int.MaxValue on long-running devices).
+    private static string OidSortKey(string oid) => string.Join('.', oid.Split('.').Select(x => ulong.TryParse(x, out var n) ? n.ToString("D10") : x));
     private static string ParentOid(string oid)
     {
         var cut = oid.LastIndexOf('.');
@@ -343,7 +344,7 @@ public partial class MainWindow : Window
     private async void ContextGet_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { QueryOidBox.Text=QueryOidForNode(n); await ExecuteGetAsync(); } }
     private async void ContextNext_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { _currentOid=QueryOidBox.Text=n.Oid; await RunGetNextAsync(n.Oid); } }
     private async void ContextWalk_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n && !RejectWhileBusy()) { _currentOid=QueryOidBox.Text=n.Oid; await RunWalkAsync(n.Oid); } }
-    private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) Clipboard.SetText(n.Oid); }
+    private void ContextCopy_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode() is { } n) CopyToClipboard(n.Oid, 1); }
     private void ContextDetails_Click(object sender, RoutedEventArgs e) { if (SelectedMibNode()!=null) DetailsPanel.IsExpanded=true; }
 
     private string QueryOidForNode(MibNode node) => IsScalar(node) ? node.Oid + ".0" : node.Oid;
@@ -414,12 +415,13 @@ public partial class MainWindow : Window
         try
         {
             var columns = new List<Dictionary<string,ISnmpData>>();
+            var options = Options();   // one device for all columns, even if the target is edited meanwhile
             foreach (var root in roots)
             {
-                var values = await _snmp.WalkAsync(Options(), root, _cts.Token, limitReached: () => Dispatcher.Invoke(() => LogWalkLimit(root)));
+                var values = await _snmp.WalkAsync(options, root, _cts.Token, limitReached: () => Dispatcher.Invoke(() => LogWalkLimit(root)));
                 columns.Add(values.ToDictionary(v => v.Id.ToString()[(root.Length + 1)..], v => v.Data));
             }
-            RememberTarget(HostBox.Text.Trim());
+            RememberTarget(options.Host);
             StatusText.Text = _language == "de" ? $"{feature}: {Keys(columns).Count()} Einträge" : $"{feature}: {Keys(columns).Count()} entries";
             Log(Tr($"{feature}: Tabelle geladen.", $"{feature}: table loaded.")); return columns;
         }
@@ -492,6 +494,7 @@ public partial class MainWindow : Window
         if (RejectWhileBusy()) return;
         _cts = new CancellationTokenSource(); SetBusy(true, Tr($"{operation} wird ausgeführt…", $"Running {operation}…"));
         var host = HostBox.Text.Trim();
+        var queriedOid = _currentOid;   // the tree or OID box may change while the query runs
         var sw = Stopwatch.StartNew();
         try
         {
@@ -511,7 +514,7 @@ public partial class MainWindow : Window
             }
             RememberTarget(host);
             StatusText.Text = Tr($"{answer.Count} Antwort(en) in {sw.ElapsedMilliseconds} ms", $"{answer.Count} response(s) in {sw.ElapsedMilliseconds} ms");
-            Log(Tr($"{operation} {_currentOid}: {answer.Count} Antwort(en), {sw.ElapsedMilliseconds} ms.", $"{operation} {_currentOid}: {answer.Count} response(s), {sw.ElapsedMilliseconds} ms."));
+            Log(Tr($"{operation} {queriedOid}: {answer.Count} Antwort(en), {sw.ElapsedMilliseconds} ms.", $"{operation} {queriedOid}: {answer.Count} response(s), {sw.ElapsedMilliseconds} ms."));
         }
         catch (OperationCanceledException) { StatusText.Text = Tr("Abgebrochen", "Cancelled"); Log(Tr($"{operation} abgebrochen.", $"{operation} cancelled.")); }
         catch (Exception ex) { ShowError(Tr($"{operation} fehlgeschlagen", $"{operation} failed"), ex); }
@@ -568,7 +571,13 @@ public partial class MainWindow : Window
     }
 
     // ---- Results copy helpers (context menu, Ctrl+C, double-click)
-    private List<QueryResult> SelectedResults() => _results.Where(ResultsGrid.SelectedItems.Contains).ToList();
+    // Selected rows in display order. A set keeps this linear for large WALK results (Ctrl+A on 10,000 rows).
+    private static List<T> SelectedInOrder<T>(IEnumerable<T> rows, DataGrid grid)
+    {
+        var selected = new HashSet<object>(grid.SelectedItems.Cast<object>(), ReferenceEqualityComparer.Instance);
+        return rows.Where(r => selected.Contains(r!)).ToList();
+    }
+    private List<QueryResult> SelectedResults() => SelectedInOrder(_results, ResultsGrid);
     private string SymbolicOid(string oid)
     {
         var node = ResolveNode(oid);
@@ -651,12 +660,12 @@ public partial class MainWindow : Window
 
         _compareRows.Clear(); _compareIndex.Clear();
         BuildCompareColumns(rounds);
-        _compareTarget = HostBox.Text.Trim();
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
         SetBusy(true, Tr("WALK-Vergleich läuft…", "WALK compare running…"));
         CompareStartButton.IsEnabled = false; CompareStopButton.IsEnabled = true;
-        var host = HostBox.Text.Trim();
+        var options = Options();   // same device and settings for every round
+        var host = _compareTarget = options.Host;
         var completed = 0;
         Log(Tr($"WALK-Vergleich gestartet: {oid}, {rounds} Runden, alle {interval} s.", $"WALK compare started: {oid}, {rounds} rounds, every {interval} s."));
         try
@@ -670,7 +679,7 @@ public partial class MainWindow : Window
                         await Task.Delay(1000, ct);
                     }
                 CompareStatusText.Text = Tr($"Runde {round + 1}/{rounds} — WALK läuft…", $"Round {round + 1}/{rounds} — walking…");
-                var answer = await _snmp.WalkAsync(Options(), oid, ct, depth, () => Dispatcher.Invoke(() => LogWalkLimit(oid)));
+                var answer = await _snmp.WalkAsync(options, oid, ct, depth, () => Dispatcher.Invoke(() => LogWalkLimit(oid)));
                 foreach (var v in answer)
                 {
                     var id = v.Id.ToString();
@@ -719,7 +728,7 @@ public partial class MainWindow : Window
         view.Filter = CompareChangedOnlyBox.IsChecked == true ? item => ((CompareRow)item).Changed : null;
     }
 
-    private List<CompareRow> SelectedCompareRows() => _compareRows.Where(CompareGrid.SelectedItems.Contains).ToList();
+    private List<CompareRow> SelectedCompareRows() => SelectedInOrder(_compareRows, CompareGrid);
     private void CompareCopyOid_Click(object sender, RoutedEventArgs e)
     {
         var rows = SelectedCompareRows();
@@ -762,9 +771,10 @@ public partial class MainWindow : Window
             UcdMemory, UcdSystemStats, UcdLoad, UcdDisk + ".2", UcdDisk + ".9",
             EntSensor + ".1", EntSensor + ".2", EntSensor + ".3", EntSensor + ".4", EntSensor + ".5", EntPhysicalName
         };
+        var target = HostBox.Text.Trim();   // the device LoadColumnsAsync queries, read before the await
         var c = await LoadColumnsAsync("Resources", roots);
         if (c == null) return;
-        _resourcesTarget = HostBox.Text.Trim();
+        _resourcesTarget = target;
         var rows = new List<ResourceRow>();
         var hr = AddHostResources(rows, c[0], c[1], c[2], c[3], c[4], c[5]);
         var ucd = AddUcd(rows, c[6], c[7], c[8], c[9], c[10]);
@@ -865,7 +875,7 @@ public partial class MainWindow : Window
         return value.Count > 0;
     }
 
-    private List<ResourceRow> SelectedResourceRows() => ResourcesGrid.Items.OfType<ResourceRow>().Where(ResourcesGrid.SelectedItems.Contains).ToList();
+    private List<ResourceRow> SelectedResourceRows() => SelectedInOrder(ResourcesGrid.Items.OfType<ResourceRow>(), ResourcesGrid);
     private void ResourcesCopyOid_Click(object sender, RoutedEventArgs e)
     {
         var rows = SelectedResourceRows().Where(r => r.Oid.Length > 0).ToList();
@@ -893,6 +903,10 @@ public partial class MainWindow : Window
         if (row.Oid.Length > 0 && CopyToClipboard(row.Oid, 1)) StatusText.Text = Tr($"OID kopiert: {row.Oid}", $"OID copied: {row.Oid}");
         e.Handled = true;
     }
+
+    // Column names are MIB names or raw OIDs; bind through the DataRowView indexer so dots are not read as a property path.
+    private void WalkTableGrid_AutoGeneratingColumn(object? sender, DataGridAutoGeneratingColumnEventArgs e) =>
+        e.Column = new DataGridTextColumn { Header = e.PropertyName, Binding = new System.Windows.Data.Binding { Path = new PropertyPath("[" + e.PropertyName + "]") } };
 
     private void PopulateWalkTable(IList<Variable> variables)
     {
@@ -969,7 +983,12 @@ public partial class MainWindow : Window
             profile?.Timeout ?? 3000, profile?.Retries ?? 1, communities);
     }
     private static string Selected(ComboBox box) => (box.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "";
-    private void SetBusy(bool busy, string text) { BusyBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed; CancelButton.IsEnabled = busy; StatusText.Text = text; }
+    // MIB loading also uses the busy bar; while a query is running (_cts set) it stays visible and cancellable.
+    private void SetBusy(bool busy, string text)
+    {
+        var active = busy || _cts != null;
+        BusyBar.Visibility = active ? Visibility.Visible : Visibility.Collapsed; CancelButton.IsEnabled = _cts != null; StatusText.Text = text;
+    }
     private void Log(string text) { LogBox.AppendText($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}\r\n"); LogBox.ScrollToEnd(); }
     private void ShowError(string title, Exception ex) { StatusText.Text = title; Log($"{Tr("FEHLER", "ERROR")}: {title}: {ex.Message}"); MessageBox.Show(ex.Message, title, MessageBoxButton.OK, MessageBoxImage.Error); }
     private string Tr(string de, string en) => _language == "de" ? de : en;
@@ -1189,7 +1208,12 @@ public partial class MainWindow : Window
                 if (s != null) _settings = s;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // Keep the unreadable file instead of overwriting it with defaults on the next save.
+            try { File.Copy(_settingsPath, _settingsPath + ".bak", true); } catch { }
+            Dispatcher.BeginInvoke(() => Log(Tr($"WARNUNG: settings.json konnte nicht gelesen werden ({ex.Message}); Kopie unter settings.json.bak.", $"WARNING: settings.json could not be read ({ex.Message}); a copy was kept as settings.json.bak.")));
+        }
         if (_settings.Profiles.Count == 0)
         {
             _settings.Profiles.Add(new SnmpProfile { Name = "Default" });
@@ -1200,7 +1224,16 @@ public partial class MainWindow : Window
 
     private void SaveSettings()
     {
-        try { _settings.Language=_language; _settings.Dark=_dark; _settings.RecentTargets=[.. _recentTargets]; Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!); File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_settings,new JsonSerializerOptions{WriteIndented=true})); } catch { }
+        try
+        {
+            _settings.Language=_language; _settings.Dark=_dark; _settings.RecentTargets=[.. _recentTargets];
+            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+            // Write to a temporary file first so a crash during the write cannot leave a truncated settings.json.
+            var temp = _settingsPath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(_settings,new JsonSerializerOptions{WriteIndented=true}));
+            File.Move(temp, _settingsPath, true);
+        }
+        catch { }
     }
 
     private async Task LoadDefaultMibFolderAsync()

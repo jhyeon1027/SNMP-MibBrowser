@@ -16,7 +16,12 @@ public sealed class MibNode
     public override string ToString() => Display;
 }
 
-public sealed record QueryResult(string Timestamp, string Operation, string Oid, string Name, string Type, string Value, string Duration, string Target = "");
+public sealed record QueryResult(string Timestamp, string Operation, string Oid, string Name, string Type, string Value, string Duration, string Target = "")
+{
+    // Grid rows are identified by instance: two identical results (same OID, value and timing) are still two rows.
+    public bool Equals(QueryResult? other) => ReferenceEquals(this, other);
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+}
 
 public sealed record InterfaceRow(string Index, string Name, string Type, string Mtu, string Speed, string Mac, string Admin, string Operational);
 public sealed record IpAddressRow(string Address, string Interface, string Netmask, string Broadcast);
@@ -119,4 +124,8 @@ public sealed class MultiTargetRow(string target, int oidCount) : System.Compone
 }
 
 // One line of the Resources tab. Oid is the instance that holds the value ("" for computed lines).
-public sealed record ResourceRow(string Category, string Item, string Value, string Source, string Oid, string Detail = "");
+public sealed record ResourceRow(string Category, string Item, string Value, string Source, string Oid, string Detail = "")
+{
+    public bool Equals(ResourceRow? other) => ReferenceEquals(this, other);
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+}

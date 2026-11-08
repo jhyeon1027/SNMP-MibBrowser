@@ -15,7 +15,7 @@ public sealed class MibParser
 
     public IReadOnlyList<MibNode> ParseFiles(IEnumerable<string> files)
     {
-        var raw = new List<(MibNode Node, string Parent, int Arc)>();
+        var raw = new List<(MibNode Node, string Parent, uint Arc)>();
         foreach (var file in files)
         {
             string text;
@@ -24,13 +24,15 @@ public sealed class MibParser
             if (string.IsNullOrWhiteSpace(module)) module = Path.GetFileName(file);
             foreach (Match m in AssignmentRx.Matches(text))
             {
+                // A sub-identifier outside 0..4294967295 is invalid; skip that definition instead of failing the whole import.
+                if (!uint.TryParse(m.Groups[5].Value, out var arc)) continue;
                 var body = m.Groups[3].Value;
                 raw.Add((new MibNode {
                     Name = m.Groups[1].Value, Module = module,
                     Syntax = Clean(SyntaxRx.Match(body).Groups[1].Value),
                     Access = Clean(AccessRx.Match(body).Groups[1].Value),
                     Description = Clean(DescriptionRx.Match(body).Groups[1].Value)
-                }, m.Groups[4].Value, int.Parse(m.Groups[5].Value)));
+                }, m.Groups[4].Value, arc));
             }
         }
 
@@ -60,5 +62,5 @@ public sealed class MibParser
     }
 
     private static string Clean(string text) => Regex.Replace(text.Replace("\"\"", "\""), @"\s+", " ").Trim(' ', '"');
-    private static string OidKey(string oid) => string.Join('.', oid.Split('.').Select(x => int.Parse(x).ToString("D10")));
+    private static string OidKey(string oid) => string.Join('.', oid.Split('.').Select(x => ulong.TryParse(x, out var n) ? n.ToString("D10") : x));
 }
