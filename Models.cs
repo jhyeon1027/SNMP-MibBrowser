@@ -117,3 +117,6 @@ public sealed class MultiTargetRow(string target, int oidCount) : System.Compone
         SetResult("", false, "", "");
     }
 }
+
+// One line of the Resources tab. Oid is the instance that holds the value ("" for computed lines).
+public sealed record ResourceRow(string Category, string Item, string Value, string Source, string Oid, string Detail = "");
